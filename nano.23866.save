@@ -16,7 +16,7 @@ p = pyaudio.PyAudio() stream = p.open(format=pyaudio.paInt16,
 # Initialize previous bar heights for ghosting effect
 previous_bar_heights = np.zeros(10) # Set the size for 10 bars 
 ghost_heights = np.zeros(10) # Set the size for 10 bars
-# Function to create a rainbow color for each bar
+# Function Function to create a rainbow color for each bar
 def get_rainbow_color(index, total_bars, offset): hue = (index / 
     total_bars + offset) % 1.0 # Use the index for unique hues color 
     = pygame.Color(0) # Create a blank color color.hsva = (hue * 360, 
