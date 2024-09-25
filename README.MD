@@ -20,8 +20,8 @@ To run this project, you'll need: - **Python 3.x** - **Pygame**
 installed (`pip install pygame`) - **PyAudio** for real-time audio 
 input (`pip install pyaudio`)
 ### Installation
-1. Clone this repository: ```bash git clone 
-   https://github.com/onojk/pygame-eq-visualizer.git ```
+1. Clone this repository: bash git clone 
+   https://github.com/onojk/pygame-eq-visualizer.git
 2. Navigate to the project directory: ```bash cd pygame-eq-visualizer 
    ```
 3. Install the necessary dependencies: ```bash pip install -r 
@@ -59,5 +59,5 @@ This project is licensed under the MIT License. See the `LICENSE`
 file for more details.
 ## Contact
 If you have any questions or run into issues, feel free to contact 
-the project owner at **onojk@example.com**. ---
+the project owner at **onojk123@gmail.com**. ---
 This README covers the essential information about the project, installation instructions, features, and contribution guidelines. Feel free to adjust it to match the specific details and structure of your repository.
