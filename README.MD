@@ -15,8 +15,8 @@
 To run this project, you will need:
 
 - **Python 3.x**
-- **Pygame** installed (`pip install pygame`)
-- **PyAudio** for real-time audio input (`pip install pyaudio`)
+- **Pygame** installed (`pip3 install pygame`)
+- **PyAudio** for real-time audio input (`pip3 install pyaudio`)
 - **PortAudio** system dependency for PyAudio:
     ```bash
     sudo apt install portaudio19-dev python3-pyaudio
@@ -42,12 +42,12 @@ To run this project, you will need:
 
 4. **Install the Python dependencies**:
     ```bash
-    pip install -r requirements.txt
+    pip3 install -r requirements.txt
     ```
 
 5. **You can also use the provided install_requirements.py script** to automatically check and install dependencies:
     ```bash
-    python install_requirements.py
+    python3 install_requirements.py
     ```
 
 ### Running the Visualizer
@@ -55,7 +55,7 @@ To run this project, you will need:
 1. Make sure your microphone or audio input device is connected.
 2. Run the visualizer:
     ```bash
-    python pygameeq.py
+    python3 pygameeq.py
     ```
 
 By default, the visualizer will capture the system's audio input and display the frequency spectrum in real-time. To visualize a specific audio file, you can modify the input source within the script.
