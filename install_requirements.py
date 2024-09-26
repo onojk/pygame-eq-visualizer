@@ -19,7 +19,7 @@ def install_libraries():
             # If the library is not installed, attempt to install it
             print(f"{library} not found. Installing...")
             try:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", library])
+                subprocess.check_call([sys.executable, "-m", "pip3", "install", library])
                 print(f"Successfully installed {library}.")
             except subprocess.CalledProcessError as e:
                 print(f"Failed to install {library}. Please install it manually.")
