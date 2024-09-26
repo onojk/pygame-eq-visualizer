@@ -57,7 +57,25 @@ To run this project, you will need:
     ```bash
     python3 pygameeq.py
     ```
+### Managing Audio Input with pavucontrol (Linux Only)
 
+In systems with multiple audio input devices (e.g., built-in audio, USB soundcards, or HDMI outputs), managing the correct input source for the visualizer can be tricky. pavucontrol (PulseAudio Volume Control) provides an intuitive interface to switch between audio sources and adjust audio stream levels.
+Installing pavucontrol
+
+To install pavucontrol on Linux:
+
+bash
+
+sudo apt install pavucontrol
+
+Usage
+
+    Open pavucontrol by typing pavucontrol in your terminal.
+    Navigate to the Recording tab while the visualizer is running.
+    Select the correct audio input device (e.g., microphone, system audio) from the dropdown next to the visualizer process.
+    Adjust the input volume if needed.
+
+By using pavucontrol, you can easily direct audio from different sources into the visualizer, ensuring the right input is used for your audio visualization.
 By default, the visualizer will capture the system's audio input and display the frequency spectrum in real-time. To visualize a specific audio file, you can modify the input source within the script.
 
 ## Customization
@@ -92,4 +110,5 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 ## Contact
 
 If you have any questions or run into issues, feel free to contact the project owner at **onojk123@gmail.com**.
+
 
