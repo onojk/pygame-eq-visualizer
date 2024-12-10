@@ -1,0 +1,61 @@
+Collecting moviepy==1.0.3
+  Downloading moviepy-1.0.3.tar.gz (388 kB)
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Requirement already satisfied: numpy in ./venv/lib/python3.12/site-packages (2.0.2)
+Requirement already satisfied: imageio in ./venv/lib/python3.12/site-packages (2.36.1)
+Requirement already satisfied: decorator in ./venv/lib/python3.12/site-packages (5.1.1)
+Requirement already satisfied: tqdm in ./venv/lib/python3.12/site-packages (4.67.1)
+Requirement already satisfied: Pillow in ./venv/lib/python3.12/site-packages (10.4.0)
+Requirement already satisfied: scipy in ./venv/lib/python3.12/site-packages (1.14.1)
+Collecting pydub
+  Using cached pydub-0.25.1-py2.py3-none-any.whl.metadata (1.4 kB)
+Collecting audiofile
+  Downloading audiofile-1.5.0-py3-none-any.whl.metadata (4.9 kB)
+Collecting opencv-python
+  Downloading opencv_python-4.10.0.84-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (20 kB)
+Collecting decorator
+  Downloading decorator-4.4.2-py2.py3-none-any.whl.metadata (4.2 kB)
+Requirement already satisfied: imageio_ffmpeg>=0.2.0 in ./venv/lib/python3.12/site-packages (from moviepy==1.0.3) (0.5.1)
+Requirement already satisfied: requests<3.0,>=2.8.1 in ./venv/lib/python3.12/site-packages (from moviepy==1.0.3) (2.32.3)
+Requirement already satisfied: proglog<=1.0.0 in ./venv/lib/python3.12/site-packages (from moviepy==1.0.3) (0.1.10)
+Collecting audeer (from audiofile)
+  Downloading audeer-2.2.0-py3-none-any.whl.metadata (4.1 kB)
+Collecting audmath>=1.3.0 (from audiofile)
+  Downloading audmath-1.4.1-py3-none-any.whl.metadata (3.6 kB)
+Requirement already satisfied: soundfile>=0.12.1 in ./venv/lib/python3.12/site-packages (from audiofile) (0.12.1)
+Requirement already satisfied: setuptools in ./venv/lib/python3.12/site-packages (from imageio_ffmpeg>=0.2.0->moviepy==1.0.3) (75.6.0)
+Requirement already satisfied: charset-normalizer<4,>=2 in ./venv/lib/python3.12/site-packages (from requests<3.0,>=2.8.1->moviepy==1.0.3) (3.4.0)
+Requirement already satisfied: idna<4,>=2.5 in ./venv/lib/python3.12/site-packages (from requests<3.0,>=2.8.1->moviepy==1.0.3) (3.10)
+Requirement already satisfied: urllib3<3,>=1.21.1 in ./venv/lib/python3.12/site-packages (from requests<3.0,>=2.8.1->moviepy==1.0.3) (2.2.3)
+Requirement already satisfied: certifi>=2017.4.17 in ./venv/lib/python3.12/site-packages (from requests<3.0,>=2.8.1->moviepy==1.0.3) (2024.8.30)
+Requirement already satisfied: cffi>=1.0 in ./venv/lib/python3.12/site-packages (from soundfile>=0.12.1->audiofile) (1.17.1)
+Requirement already satisfied: pycparser in ./venv/lib/python3.12/site-packages (from cffi>=1.0->soundfile>=0.12.1->audiofile) (2.22)
+Downloading decorator-4.4.2-py2.py3-none-any.whl (9.2 kB)
+Using cached pydub-0.25.1-py2.py3-none-any.whl (32 kB)
+Downloading audiofile-1.5.0-py3-none-any.whl (1.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 46.9 MB/s eta 0:00:00
+Downloading opencv_python-4.10.0.84-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (62.5 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 62.5/62.5 MB 106.5 MB/s eta 0:00:00
+Downloading audmath-1.4.1-py3-none-any.whl (23 kB)
+Downloading audeer-2.2.0-py3-none-any.whl (41 kB)
+Building wheels for collected packages: moviepy
+  Building wheel for moviepy (pyproject.toml): started
+  Building wheel for moviepy (pyproject.toml): finished with status 'done'
+  Created wheel for moviepy: filename=moviepy-1.0.3-py3-none-any.whl size=110709 sha256=fd11dfb59484f0d9d0a6187cc2048f1e8ab04fe3be9a97f3f4003d5863d96c28
+  Stored in directory: /home/onojk123/.cache/pip/wheels/df/ba/4b/0917fc0c8833c8ba7016565fc975b74c67bc8610806e930272
+Successfully built moviepy
+Installing collected packages: pydub, opencv-python, decorator, audmath, audeer, moviepy, audiofile
+  Attempting uninstall: decorator
+    Found existing installation: decorator 5.1.1
+    Uninstalling decorator-5.1.1:
+      Successfully uninstalled decorator-5.1.1
+  Attempting uninstall: moviepy
+    Found existing installation: moviepy 2.1.1
+    Uninstalling moviepy-2.1.1:
+      Successfully uninstalled moviepy-2.1.1
+Successfully installed audeer-2.2.0 audiofile-1.5.0 audmath-1.4.1 decorator-4.4.2 moviepy-1.0.3 opencv-python-4.10.0.84 pydub-0.25.1
