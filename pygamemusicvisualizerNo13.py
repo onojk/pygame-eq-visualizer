@@ -24,7 +24,7 @@ SCALE_MAX = 1.2  # Maximum scaling factor
 FPS = 30  # Frames per second for video playback
 
 # Path to your video
-VIDEO_PATH = "/home/onojk123/Downloads/Lotus Dream.mp4"
+VIDEO_PATH =  "/home/onojk123/Videos/asdfaewe423r3234-6000-720p.mp4"
 
 # Audio Input Setup
 import sys
