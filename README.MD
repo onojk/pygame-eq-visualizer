@@ -1,9 +1,11 @@
-# Pygame EQ Visualizer
+# Pygame EQ Visualizer: Real-Time Audio Visualization with Pygame
 
 ## Overview
-**Pygame EQ Visualizer** is a real-time audio visualizer built using Python and Pygame. It captures audio input and generates a dynamic visual representation of sound frequencies, similar to an equalizer display. This project demonstrates the versatility of Pygame, offering a fun and interactive way to visualize audio data beyond game development.
+
+**Pygame EQ Visualizer** is a real-time audio visualizer built using Python and Pygame. It captures audio input and generates a dynamic visual representation of sound frequencies, similar to an equalizer display. This project showcases Pygame's versatility in a fun, interactive way, extending its use beyond game development.
 
 ## Features
+
 - **Real-Time Audio Processing**: Visualizes frequencies from live audio input or audio files.
 - **Customizable Display**: Modify colors, bar sizes, animation speed, and more.
 - **Simple and Lightweight**: Ideal for beginners learning audio processing and Pygame.
@@ -15,82 +17,119 @@
 To run this project, you will need:
 
 - **Python 3.x**
-- **Pygame** installed (`pip3 install pygame`)
-- **PyAudio** for real-time audio input (`pip3 install pyaudio`)
-- **PortAudio** system dependency for PyAudio:
-    ```bash
-    sudo apt install portaudio19-dev python3-pyaudio
-    ```
+- **Pygame** installed:
+  ```bash
+  pip3 install pygame
+  ```
+- **PyAudio** for real-time audio input:
+  ```bash
+  pip3 install pyaudio
+  ```
+- **PortAudio** system dependency for PyAudio (Linux):
+  ```bash
+  sudo apt install portaudio19-dev python3-pyaudio
+  ```
 
 ### Installation
 
 1. **Clone this repository**:
-    ```bash
-    git clone https://github.com/onojk/pygame-eq-visualizer.git
-    ```
+
+   ```bash
+   git clone https://github.com/onojk/pygame-eq-visualizer.git
+   ```
 
 2. **Navigate to the project directory**:
-    ```bash
-    cd pygame-eq-visualizer
-    ```
 
-3. **Install the necessary system dependencies (required for PyAudio)**:
-    ```bash
-    sudo apt update
-    sudo apt install portaudio19-dev python3-pyaudio
-    ```
+   ```bash
+   cd pygame-eq-visualizer
+   ```
+
+3. **Install the necessary system dependencies (Linux)**:
+
+   ```bash
+   sudo apt update
+   sudo apt install portaudio19-dev python3-pyaudio
+   ```
+
+   For Windows and macOS, follow the specific PyAudio installation instructions from [PyAudio's official page](https://pypi.org/project/PyAudio/).
 
 4. **Install the Python dependencies**:
-    ```bash
-    pip3 install -r requirements.txt
-    ```
 
-5. **You can also use the provided install_requirements.py script** to automatically check and install dependencies:
-    ```bash
-    python3 install_requirements.py
-    ```
+   ```bash
+   pip3 install -r requirements.txt
+   ```
+
+5. **Use the provided install\_requirements.py script** to automatically check and install dependencies:
+
+   ```bash
+   python3 install_requirements.py
+   ```
 
 ### Running the Visualizer
 
-1. Make sure your microphone or audio input device is connected.
+1. Ensure your microphone or audio input device is connected.
 2. Run the visualizer:
-    ```bash
-    python3 pygameeq.py
-    ```
+   ```bash
+   python3 pygameeq.py
+   ```
+
 ### Managing Audio Input with pavucontrol (Linux Only)
 
-In systems with multiple audio input devices (e.g., built-in audio, USB soundcards, or HDMI outputs), managing the correct input source for the visualizer can be tricky. pavucontrol (PulseAudio Volume Control) provides an intuitive interface to switch between audio sources and adjust audio stream levels.
-Installing pavucontrol
+In systems with multiple audio input devices (e.g., built-in audio, USB soundcards, or HDMI outputs), managing the correct input source for the visualizer can be tricky. **pavucontrol** (PulseAudio Volume Control) provides an intuitive interface to switch between audio sources and adjust audio stream levels.
 
-To install pavucontrol on Linux:
+#### Installation
 
-bash
+To install **pavucontrol** on Linux:
 
+```bash
 sudo apt install pavucontrol
+```
 
-Usage
+#### Usage
 
-    Open pavucontrol by typing pavucontrol in your terminal.
-    Navigate to the Recording tab while the visualizer is running.
-    Select the correct audio input device (e.g., microphone, system audio) from the dropdown next to the visualizer process.
-    Adjust the input volume if needed.
+1. Open pavucontrol by typing:
+   ```bash
+   pavucontrol
+   ```
+2. Navigate to the **Recording** tab while the visualizer is running.
+3. Select the correct audio input device (e.g., microphone, system audio) from the dropdown next to the visualizer process.
+4. Adjust the input volume if needed.
 
-By using pavucontrol, you can easily direct audio from different sources into the visualizer, ensuring the right input is used for your audio visualization.
-By default, the visualizer will capture the system's audio input and display the frequency spectrum in real-time. To visualize a specific audio file, you can modify the input source within the script.
+By using pavucontrol, you can easily direct audio from different sources into the visualizer, ensuring the right input is used for your audio visualization. To visualize a specific audio file, modify the input source within the script.
 
 ## Customization
 
 You can tweak the following settings within the code:
 
-- **Bar Colors**: Customize the color of the equalizer bars for a personalized look.
-- **Bar Size**: Modify the height and width of the bars to suit your preference.
-- **Animation Speed**: Adjust the speed at which the bars react to audio input.
+- **Bar Colors**:
+
+  ```python
+  # Example: Changing Bar Colors
+  BAR_COLOR = (255, 0, 0)  # Red
+  ```
+
+- **Bar Size**:
+
+  ```python
+  # Example: Adjusting Bar Size
+  BAR_WIDTH = 10  # Width of each bar
+  MAX_BAR_HEIGHT = 300  # Maximum height of bars
+  ```
+
+- **Animation Speed**:
+
+  ```python
+  # Example: Modifying Animation Speed
+  FRAME_RATE = 60  # Frames per second
+  ```
+
+Customize these settings in the code to achieve a personalized look and behavior for your visualizer.
 
 ## Target Audience
 
 - Python developers learning real-time audio processing.
-- Developers interested in exploring Pygame beyond game development.
-- Anyone looking to create an audio visualizer for personal or educational use.
+- Developers exploring Pygame beyond game development.
+- Audio and visualization enthusiasts interested in creating personalized tools.
 
 ## Comparison
 
@@ -101,7 +140,22 @@ Compared to other audio visualizers, this project is:
 
 ## Contributing
 
-Contributions are welcome! If you have any ideas for improving the project, feel free to submit a pull request or open an issue.
+Contributions are welcome! Here’s how you can help:
+
+1. Fork the repository.
+2. Create a new branch for your feature or bugfix:
+   ```bash
+   git checkout -b feature-name
+   ```
+3. Commit your changes:
+   ```bash
+   git commit -m "Add feature-name"
+   ```
+4. Push to the branch:
+   ```bash
+   git push origin feature-name
+   ```
+5. Submit a pull request.
 
 ## License
 
@@ -109,6 +163,8 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## Contact
 
-If you have any questions or run into issues, feel free to contact the project owner at **onojk123@gmail.com**.
+If you have any questions or run into issues, feel free to contact the project owner:
 
+- Email: **[onojk123@gmail.com](mailto\:onojk123@gmail.com)**
+- GitHub: [https://github.com/onojk/pygame-eq-visualizer](https://github.com/onojk/pygame-eq-visualizer)
 
