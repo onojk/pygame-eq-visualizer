@@ -42,3 +42,4 @@ coverage.xml
 # macOS files
 .DS_Store
 
+venv/
