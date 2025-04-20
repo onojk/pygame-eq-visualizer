@@ -24,7 +24,7 @@ SCALE_MAX = 1.2  # Maximum scaling factor
 FPS = 30  # Frames per second for video playback
 
 # Path to your video
-VIDEO_PATH =  "/home/onojk123/Downloads/Silent Kaleidoscope Uploaded In 4K UHD 60 fps Colorful Soothing Calming 109.mp4"
+VIDEO_PATH = "/home/onojk123/Videos/515151518146.mp4"
 
 # Audio Input Setup
 import sys

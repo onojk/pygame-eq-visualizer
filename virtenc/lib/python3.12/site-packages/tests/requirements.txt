@@ -1,0 +1,7 @@
+audplot
+audresample
+pandas
+pytest
+pytest-cov
+pytest-doctestplus
+sox

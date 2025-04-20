@@ -38,6 +38,7 @@ for row in range(NUM_ROWS):
         y = row * GRID_SPACING + GRID_SPACING // 2
         dots.append({
             'pos': [x, y],
+            'origin': [x, y],  # Track grid start position
             'dir': [0, 0],
             'speed_mult': 0.1,
             'scatter_target': None,
@@ -80,7 +81,6 @@ def switch_state(new_state):
     print(f"🔁 Switched to: {STATE}")
 
     if STATE == "paused":
-        # Invert dot colors using hue rotation
         for dot in dots:
             dot['color'] = invert_color_hue(dot['color'])
 
@@ -121,15 +121,27 @@ while running:
                 target_y = dot['pos'][1] + math.sin(angle) * HEIGHT * spread
                 dot['scatter_target'] = [target_x, target_y]
 
-            tx, ty = dot['scatter_target']
-            sdx = tx - dot['pos'][0]
-            sdy = ty - dot['pos'][1]
-            sdist = math.hypot(sdx, sdy)
-            if sdist > 1:
-                dot['pos'][0] += sdx / sdist * 1.5
-                dot['pos'][1] += sdy / sdist * 1.5
+            if isinstance(dot['scatter_target'], list):
+                tx, ty = dot['scatter_target']
+                sdx = tx - dot['pos'][0]
+                sdy = ty - dot['pos'][1]
+                sdist = math.hypot(sdx, sdy)
+                if sdist > 1:
+                    dot['pos'][0] += sdx / sdist * 1.5
+                    dot['pos'][1] += sdy / sdist * 1.5
+                else:
+                    dot['scatter_target'] = "done"
+
+        elif STATE == "returning":
+            tx, ty = dot['origin']
+            rdx = tx - dot['pos'][0]
+            rdy = ty - dot['pos'][1]
+            rdist = math.hypot(rdx, rdy)
+            if rdist > 1:
+                dot['pos'][0] += rdx / rdist * 1.2
+                dot['pos'][1] += rdy / rdist * 1.2
             else:
-                dot['scatter_target'] = None
+                dot['pos'][0], dot['pos'][1] = tx, ty
 
         pygame.draw.circle(screen, dot['color'], (int(dot['pos'][0]), int(dot['pos'][1])), DOT_RADIUS)
 
@@ -141,7 +153,15 @@ while running:
         switch_state("scattering")
 
     elif STATE == "scattering":
-        if all(dot['scatter_target'] is None for dot in dots):
+        if all(dot['scatter_target'] == "done" for dot in dots):
+            switch_state("returning")
+
+    elif STATE == "returning":
+        if all(math.hypot(dot['pos'][0] - dot['origin'][0], dot['pos'][1] - dot['origin'][1]) < 2 for dot in dots):
+            for dot in dots:
+                dot['scatter_target'] = None
+                dot['color'] = DEFAULT_DOT_COLOR
+                dot['speed_mult'] = 0.1
             switch_state("coalescing")
 
     # === Speed Ramp ===
