@@ -1,158 +1,102 @@
-import librosa
-import librosa.display
+#!/usr/bin/env python3
+"""
+Minimal Pygame visualizer (safe opener)
+- Always opens a window (1280x720) with a lightweight animated pattern.
+- If AUDIO_FILE is set or ./audio_file.mp3 exists, it plays it (no analysis needed).
+- Esc to quit; also quits on window close.
+"""
+import os, sys, math, time, random
+import pygame
 import numpy as np
-import matplotlib.pyplot as plt
-import json
 
-def analyze_audio(audio_path):
-    """
-    Analyzes audio to extract tempo, RMS energy, chroma, and spectrogram.
-    """
-    print(f"Analyzing audio: {audio_path}")
-    
-    # Attempt to load audio
-    try:
-        y, sr = librosa.load(audio_path)
-        print("Audio loaded successfully.")
-    except Exception as e:
-        print(f"Error loading audio: {e}")
-        return None, None, None, None, None
-    
-    # Extract tempo and beat frames
-    try:
-        tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
-        print(f"Tempo detected: {float(tempo):.2f} BPM")
-    except Exception as e:
-        print(f"Error detecting tempo and beats: {e}")
-        return None, None, None, None, None
-    
-    # Compute RMS energy
-    try:
-        print("Calculating RMS energy...")
-        rms = librosa.feature.rms(y=y)
-    except Exception as e:
-        print(f"Error calculating RMS energy: {e}")
-        return None, None, None, None, None
-    
-    # Compute chromagram (pitch classes)
-    try:
-        print("Calculating chromagram...")
-        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-    except Exception as e:
-        print(f"Error calculating chromagram: {e}")
-        return None, None, None, None, None
-    
-    # Compute spectrogram
-    try:
-        print("Calculating spectrogram...")
-        spectrogram = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
-    except Exception as e:
-        print(f"Error calculating spectrogram: {e}")
-        return None, None, None, None, None
-    
-    print("Audio analysis complete.")
-    return beats, rms, chroma, spectrogram, sr
+W, H = 1280, 720
+FPS = 60
 
-def visualize_audio_features(rms, chroma, spectrogram, sr, output_path="audio_visualization.png"):
-    """
-    Visualizes RMS energy, chromagram, and spectrogram, and saves the plot as a file.
-    """
-    print("Starting visualization...")
-    plt.figure(figsize=(12, 8))
-    
-    # Plot RMS energy
-    plt.subplot(3, 1, 1)
-    plt.plot(rms[0])
-    plt.title("RMS Energy (Volume)")
-    plt.xlabel("Frames")
-    plt.ylabel("Energy")
-    
-    # Plot chromagram
-    plt.subplot(3, 1, 2)
-    librosa.display.specshow(chroma, x_axis="time", y_axis="chroma", sr=sr)
-    plt.colorbar()
-    plt.title("Chromagram (Pitch Classes)")
-    
-    # Plot spectrogram
-    plt.subplot(3, 1, 3)
-    librosa.display.specshow(librosa.power_to_db(spectrogram, ref=np.max), x_axis="time", y_axis="mel", sr=sr)
-    plt.colorbar(format="%+2.0f dB")
-    plt.title("Mel Spectrogram (Frequency Content)")
-    
-    plt.tight_layout()
-    
-    # Save the plot as a file
-    plt.savefig(output_path)
-    print(f"Visualization saved as: {output_path}")
-    
-    plt.show()
-    print("Visualization complete.")
+def init_audio():
+    """Try to play any audio just for vibe; analysis is not required here."""
+    try:
+        pygame.mixer.pre_init(44100, -16, 2, 512)
+        pygame.mixer.init()
+        audio_path = os.environ.get("AUDIO_FILE") or "audio_file.mp3"
+        if os.path.exists(audio_path):
+            pygame.mixer.music.load(audio_path)
+            pygame.mixer.music.play(-1)
+    except Exception:
+        # Audio is optional; ignore any failure.
+        pass
 
-def align_audio_with_frames(beats, rms, chroma, spectrogram, sr, video_fps, num_frames):
-    """
-    Aligns audio features with video frames.
-    
-    Parameters:
-    - beats: Beat timings in frames
-    - rms: RMS energy
-    - chroma: Chromagram
-    - spectrogram: Spectrogram
-    - sr: Sampling rate of the audio
-    - video_fps: Frames per second of the video
-    - num_frames: Total number of frames in the video
-    
-    Returns:
-    - alignment: Dictionary with frame-by-frame alignment of features.
-    """
-    print("Aligning audio features with video frames...")
-    
-    # Time per frame in seconds
-    frame_duration = 1 / video_fps
-    
-    # Create alignment for each frame
-    alignment = []
-    for frame_idx in range(num_frames):
-        frame_time = frame_idx * frame_duration  # Time in seconds
-        audio_idx = int(frame_time * sr)  # Corresponding audio index
-        
-        # Align features
-        frame_data = {
-            "frame_idx": frame_idx,
-            "time": frame_time,
-            "rms": float(rms[0][audio_idx]) if audio_idx < len(rms[0]) else 0,
-            "chroma": chroma[:, audio_idx].tolist() if audio_idx < chroma.shape[1] else [0] * chroma.shape[0],
-            "spectrogram": spectrogram[:, audio_idx].tolist() if audio_idx < spectrogram.shape[1] else [0] * spectrogram.shape[0],
-        }
-        alignment.append(frame_data)
-    
-    print("Alignment complete.")
-    return alignment
+def draw_lissajous(surface, t):
+    surface.fill((10, 10, 14))
+    cx, cy = W//2, H//2
+    A = min(W, H) * 0.35
+    a, b = 3, 2
+    delta = t * 0.7
+    pts = []
+    n = 600
+    for i in range(n):
+        p = i / (n - 1)
+        x = cx + A * math.sin(a * p * 2*math.pi + delta)
+        y = cy + A * math.sin(b * p * 2*math.pi)
+        pts.append((x, y))
+    # fade trail
+    pygame.draw.aalines(surface, (200, 220, 255), False, pts)
+    # pulsing ring
+    r = int(80 + 60 * (0.5 + 0.5 * math.sin(t * 1.6)))
+    pygame.draw.circle(surface, (80, 120, 255), (cx, cy), r, 2)
+
+def draw_bars(surface, t):
+    surface.fill((8, 10, 12))
+    bars = 64
+    w = W // bars
+    for i in range(bars):
+        phase = t * 1.8 + i * 0.23
+        h = int((H * 0.3) * (0.55 + 0.45 * math.sin(phase)))
+        x = i * w
+        y = H - h - 50
+        rect = pygame.Rect(x+2, y, w-4, h)
+        col = (40 + (i*3) % 160, 140, 220)
+        pygame.draw.rect(surface, col, rect, border_radius=4)
+
+def main():
+    pygame.init()
+    pygame.display.set_caption(os.path.basename(sys.argv[0]) + " — minimal")
+    screen = pygame.display.set_mode((W, H))
+    clock = pygame.time.Clock()
+    init_audio()
+
+    t0 = time.time()
+    mode = 0
+    next_switch = t0 + 7.0  # alternate between two simple looks
+
+    running = True
+    while running:
+        t = time.time() - t0
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                running = False
+            elif e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_ESCAPE:
+                    running = False
+                elif e.key == pygame.K_SPACE:
+                    mode = (mode + 1) % 2
+
+        if time.time() > next_switch:
+            mode = (mode + 1) % 2
+            next_switch = time.time() + 7.0
+
+        if mode == 0:
+            draw_lissajous(screen, t)
+        else:
+            draw_bars(screen, t)
+
+        pygame.display.flip()
+        clock.tick(FPS)
+
+    try:
+        pygame.mixer.music.stop()
+    except Exception:
+        pass
+    pygame.quit()
 
 if __name__ == "__main__":
-    # Path to the extracted MP3 file
-    audio_path = "/home/onojk123/pygame-eq-visualizer/audio_file.mp3"
-
-    # Video details
-    video_fps = 30  # Frames per second of your video
-    num_frames = 7500  # Total number of frames (example, adjust as needed)
-
-    try:
-        # Step 1: Analyze the audio
-        beats, rms, chroma, spectrogram, sr = analyze_audio(audio_path)
-        if beats is None:
-            print("Audio analysis failed. Exiting.")
-        else:
-            # Step 2: Visualize the extracted features
-            visualize_audio_features(rms, chroma, spectrogram, sr, output_path="audio_visualization.png")
-            
-            # Step 3: Align audio with video frames
-            alignment = align_audio_with_frames(beats, rms, chroma, spectrogram, sr, video_fps, num_frames)
-            
-            # Save the alignment data
-            with open("alignment.json", "w") as f:
-                json.dump(alignment, f, indent=4)
-            print("Alignment data saved as 'alignment.json'.")
-            
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
+    main()

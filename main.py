@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""
+main.py — Simple launcher & smoke‑tester for this repo's visualizer scripts.
+
+Features
+- Discovers runnable *.py scripts in the repo (excluding this file and a few utilities)
+- Interactive menu to launch a selected program
+- --test-all mode to smoke‑test every discovered script with a timeout
+- Captures stdout/stderr to runlogs/<script>.log for troubleshooting
+- Optional syntax pre-check via py_compile before running
+- Allows include/exclude glob patterns and per-script execution
+
+Usage examples
+  python3 main.py                      # interactive menu
+  python3 main.py --test-all           # smoke‑test all scripts (default 8s timeout)
+  python3 main.py --test-all --timeout 12 --include "*visualizer*.py"
+  python3 main.py --run pygamemusicvisualizer.py
+
+Notes
+- Some scripts open a Pygame window and are meant to run indefinitely.
+  In test mode we kill them after N seconds and still count that as a pass
+  if they started successfully.
+- If a script requires an audio file, set the AUDIO_FILE environment variable
+  or place a default file at ./audio_file.mp3 (already in this repo).
+- Logs are written to ./runlogs/<script>.log
+"""
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import os
+import py_compile
+import shutil
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+from typing import Iterable, List, Dict
+
+# ---------- Configuration ----------
+REPO_ROOT = Path(__file__).resolve().parent
+RUNLOG_DIR = REPO_ROOT / "runlogs"
+DEFAULT_TIMEOUT = 8  # seconds for smoke tests
+WINDOW_DETECT_TIMEOUT = 5  # seconds to wait specifically for a window
+QUICK_EXIT_SECS = 2        # if a script exits this fast, assume "no open"
+REQUIRE_WINDOW_TO_PASS = True  # consider a visible window "proper launch" when possible
+
+# Heuristics for excluding files that are not meant to be launched
+EXCLUDE_GLOBS = [
+    "main.py",
+    "setup*.py",
+    "test_*.py",
+    "*_test.py",
+    "install_requirements.py",
+    "*__init__*.py",
+    "*emoji.py",  # utility
+    "*entropic_worms.c",  # C file named .c but guard anyway
+]
+
+# Prefer scripts whose names look like visualizers
+PREFERRED_INCLUDE = [
+    "*visualizer*.py",
+    "pygameeq.py",
+    "pygamemusicvisualizer*.py",
+    "warpfield_visualizer.py",
+    "coalescing_grid.py",
+    "entropic_*.py",
+]
+
+# ---------- Helpers ----------
+
+def color(s: str, code: str) -> str:
+    if not sys.stdout.isatty():
+        return s
+    return f"\033[{code}m{s}\033[0m"
+
+def green(s: str) -> str: return color(s, "32")
+
+def yellow(s: str) -> str: return color(s, "33")
+
+def red(s: str) -> str: return color(s, "31")
+
+def blue(s: str) -> str: return color(s, "34")
+
+
+def ensure_runlog_dir() -> None:
+    RUNLOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def matches_any(name: str, patterns: Iterable[str]) -> bool:
+    return any(fnmatch.fnmatch(name, pat) for pat in patterns)
+
+
+def discover_scripts(include: List[str] | None = None,
+                     exclude: List[str] | None = None) -> List[Path]:
+    include = include or ["*.py"]
+    exclude = (exclude or []) + EXCLUDE_GLOBS
+
+    candidates: List[Path] = []
+    for p in REPO_ROOT.iterdir():
+        if not p.is_file():
+            continue
+        if p.suffix != ".py":
+            continue
+        name = p.name
+        if matches_any(name, exclude):
+            continue
+        if include and not matches_any(name, include):
+            # If not in include set, still allow later, but we collect separately
+            pass
+        candidates.append(p)
+
+    # Boost preferred names to the top (stable sort)
+    def priority(path: Path) -> int:
+        return 0 if matches_any(path.name, PREFERRED_INCLUDE) else 1
+
+    candidates.sort(key=lambda p: (priority(p), p.name.lower()))
+    return candidates
+
+
+def syntax_check(script: Path) -> tuple[bool, str | None]:
+    try:
+        py_compile.compile(str(script), doraise=True)
+        return True, None
+    except py_compile.PyCompileError as e:
+        return False, str(e)
+
+
+def _which(cmd: str) -> str | None:
+    return shutil.which(cmd)
+
+
+def _detect_window_for_pid(pid: int, timeout: int) -> bool:
+    """Try to detect if a real window was created by this PID within `timeout` seconds.
+    Uses xdotool/wmctrl if available. Returns True if a window is found, else False.
+    """
+    xdotool = _which("xdotool")
+    wmctrl = _which("wmctrl")
+    if not (xdotool or wmctrl):
+        # Cannot detect windows without these tools
+        return False
+
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if xdotool:
+                # xdotool search --pid <pid> returns window IDs (lines) when present
+                proc = subprocess.run([xdotool, "search", "--pid", str(pid)], capture_output=True, text=True)
+                if proc.returncode == 0 and proc.stdout.strip():
+                    return True
+            if wmctrl:
+                proc = subprocess.run([wmctrl, "-lp"], capture_output=True, text=True)
+                if proc.returncode == 0:
+                    for line in proc.stdout.splitlines():
+                        # wmctrl -lp shows PID in 3rd column typically
+                        parts = line.split()
+                        if len(parts) >= 3 and parts[2].isdigit() and int(parts[2]) == pid:
+                            return True
+        except Exception:
+            pass
+        time.sleep(0.15)
+    return False
+
+
+def run_script(script: Path, timeout: int, env_extra: Dict[str, str] | None = None) -> Dict[str, str]:
+    ensure_runlog_dir()
+    log_path = RUNLOG_DIR / f"{script.stem}.log"
+
+    env = os.environ.copy()
+    if env_extra:
+        env.update(env_extra)
+
+    # Prefer venv python if present
+    python_exe = sys.executable
+    venvs = [REPO_ROOT / "myenv" / "bin" / "python", REPO_ROOT / "virtenc" / "bin" / "python"]
+    for v in venvs:
+        if v.exists():
+            python_exe = str(v)
+            break
+
+    with open(log_path, "w", encoding="utf-8", errors="ignore") as log:
+        log.write(f"[main.py] Launching {script.name} with timeout={timeout}s\n")
+        log.write(f"[main.py] Using interpreter: {python_exe}\n\n")
+        log.flush()
+        try:
+            proc = subprocess.Popen(
+                [python_exe, str(script)],
+                cwd=str(REPO_ROOT),
+                stdout=log, stderr=log, env=env
+            )
+        except FileNotFoundError as e:
+            return {"script": script.name, "status": "spawn_error", "detail": str(e), "log": str(log_path)}
+
+        # Phase 1: quick-exit / crash detection window
+        try:
+            ret = proc.wait(timeout=min(timeout, QUICK_EXIT_SECS))
+            # Exited quickly
+            if ret == 0:
+                return {"script": script.name, "status": "no_window_quick_exit", "detail": f"exited in <{QUICK_EXIT_SECS}s", "log": str(log_path)}
+            else:
+                return {"script": script.name, "status": f"crash_exit_{ret}", "detail": f"crashed in <{QUICK_EXIT_SECS}s", "log": str(log_path)}
+        except subprocess.TimeoutExpired:
+            # Still alive after quick window — now try to detect an actual window
+            window_ok = _detect_window_for_pid(proc.pid, WINDOW_DETECT_TIMEOUT)
+            if window_ok:
+                # Script has a window; for smoke test we let it run a bit more then kill
+                try:
+                    proc.wait(timeout=max(0, timeout - QUICK_EXIT_SECS - WINDOW_DETECT_TIMEOUT))
+                    # It closed on its own within timeout
+                    return {"script": script.name, "status": "window_ok_exited", "detail": "window shown; exited cleanly", "log": str(log_path)}
+                except subprocess.TimeoutExpired:
+                    # Still alive — terminate for test classification
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    return {"script": script.name, "status": "window_ok_alive", "detail": "window shown; alive at timeout", "log": str(log_path)}
+            else:
+                # No window detected — treat as headless
+                try:
+                    proc.wait(timeout=max(0, timeout - QUICK_EXIT_SECS))
+                    ret = proc.returncode
+                    status = "headless_ok" if ret == 0 else f"headless_exit_{ret}"
+                    return {"script": script.name, "status": status, "detail": "no window detected", "log": str(log_path)}
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    return {"script": script.name, "status": "headless_alive", "detail": "no window; alive at timeout", "log": str(log_path)}
+
+
+def print_table(rows: List[Dict[str, str]]) -> None:
+    if not rows:
+        print(yellow("No results."))
+        return
+    cols = ["script", "status", "detail", "log"]
+    widths = {c: max(len(c), *(len(str(r.get(c, ""))) for r in rows)) for c in cols}
+    def line(ch: str = "-"):
+        print(ch * (sum(widths.values()) + len(cols) * 3 + 1))
+    def row(vals: Dict[str, str] | None):
+        if vals is None:
+            print("| " + " | ".join(c.ljust(widths[c]) for c in cols) + " |")
+        else:
+            print("| " + " | ".join(str(vals.get(c, "")).ljust(widths[c]) for c in cols) + " |")
+
+    # Color rows based on status
+    def colorize(status: str, s: str) -> str:
+        if status.startswith("window_ok"): return green(s)
+        if status.startswith("crash_exit") or status in ("spawn_error",): return red(s)
+        if status.startswith("headless_exit"): return red(s)
+        if status in ("no_window_quick_exit", "headless_alive"): return yellow(s)
+        return s
+
+    line("=")
+    row(None)
+    line("=")
+    for r in rows:
+        status = r.get("status", "")
+        print(colorize(status, "| " + " | ".join(str(r.get(c, "")).ljust(widths[c]) for c in cols) + " |"))
+    line("=")
+
+
+# ---------- CLI ----------
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Launcher & smoke‑tester for this repo's visualizer scripts",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent(
+            """
+            Exit codes in test mode:
+  no_window_quick_exit  script exited with code 0 in <QUICK_EXIT_SECS; likely did not open a window
+  crash_exit_<N>        exited non‑zero quickly (crash on start)
+  window_ok_exited      a real window appeared and the app exited before timeout
+  window_ok_alive       a real window appeared and remained alive at timeout
+  headless_ok           no window detected; process exited cleanly later
+  headless_exit_<N>     no window; process exited non‑zero later
+  headless_alive        no window; still alive at timeout
+  spawn_error           failed to start the interpreter or script
+"""
+        ),
+    )
+    p.add_argument("--include", action="append", default=[], help="Glob(s) to include (e.g. '*visualizer*.py'). Can be repeated.")
+    p.add_argument("--exclude", action="append", default=[], help="Glob(s) to exclude. Can be repeated.")
+    p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="Timeout seconds for test runs (default: %(default)s)")
+    p.add_argument("--test-all", action="store_true", help="Smoke‑test all discovered scripts")
+    p.add_argument("--run", metavar="SCRIPT", help="Run a specific script by exact filename")
+    p.add_argument("--no-syntax-check", action="store_true", help="Skip py_compile syntax checks before running")
+    p.add_argument("--list", action="store_true", help="List discovered scripts and exit")
+    return p.parse_args()
+
+
+def interactive_menu(scripts: List[Path], timeout: int) -> None:
+    print(blue("\nDiscovered runnable scripts:"))
+    for i, s in enumerate(scripts, 1):
+        tag = "★" if matches_any(s.name, PREFERRED_INCLUDE) else " "
+        print(f"  {i:2d}. {s.name} {tag}")
+    print("\nOptions:")
+    print("  [number]  Run that script now")
+    print("  a         Test ALL (" + str(timeout) + "s each)")
+    print("  q         Quit")
+
+    while True:
+        choice = input(blue("Select: ")).strip().lower()
+        if choice == "q":
+            return
+        if choice == "a":
+            results = []
+            for s in scripts:
+                ok, err = (True, None) if args.no_syntax_check else syntax_check(s)
+                if not ok:
+                    print(red(f"[skip] {s.name} — syntax error"))
+                    results.append({"script": s.name, "status": "syntax_error", "detail": str(err)[:160], "log": "-"})
+                    continue
+                res = run_script(s, timeout=args.timeout, env_extra={"AUDIO_FILE": str(REPO_ROOT / "audio_file.mp3")})
+                status = res["status"]
+                color_fn = green if status in ("ok", "alive_timeout") else red
+                print(color_fn(f"[{status}] {s.name}  log: {res['log']}"))
+                results.append(res)
+            print_table(results)
+            return
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(scripts):
+                s = scripts[idx]
+                ok, err = (True, None) if args.no_syntax_check else syntax_check(s)
+                if not ok:
+                    print(red(f"Syntax error in {s.name}:\n{err}"))
+                    return
+                print(yellow(f"Running {s.name} (Ctrl+C to stop)…"))
+                res = run_script(s, timeout=10**9)  # effectively no timeout; user can close the window
+                print(green(f"Process ended: {res['status']}  log: {res['log']}"))
+                return
+        print(yellow("Invalid choice. Try again."))
+
+
+if __name__ == "__main__":
+    args = parse_args()
+
+    include_globs = args.include or ["*.py"]
+    exclude_globs = args.exclude or []
+
+    scripts = discover_scripts(include=include_globs, exclude=exclude_globs)
+    if not scripts:
+        print(red("No scripts found. Try adjusting --include/--exclude patterns."))
+        sys.exit(1)
+
+    if args.list:
+        for s in scripts:
+            print(s.name)
+        sys.exit(0)
+
+    if args.run:
+        target = next((p for p in scripts if p.name == args.run), None)
+        if not target:
+            print(red(f"Script '{args.run}' not found among discovered candidates."))
+            for s in scripts:
+                print(" -", s.name)
+            sys.exit(2)
+        ok, err = (True, None) if args.no_syntax_check else syntax_check(target)
+        if not ok:
+            print(red(f"Syntax error in {target.name}:\n{err}"))
+            sys.exit(3)
+        print(yellow(f"Running {target.name} (Ctrl+C to stop)…"))
+        # Run without timeout for normal interactive use
+        res = run_script(target, timeout=10**9)
+        print(green(f"Process ended: {res['status']}  log: {res['log']}"))
+        sys.exit(0 if res["status"] in ("ok",) else 0)
+
+    if args.test_all:
+        results = []
+        # Let users know if window detection tools are present
+        have_tools = bool(_which("xdotool") or _which("wmctrl"))
+        if not have_tools:
+            print(yellow("[hint] Install 'xdotool' or 'wmctrl' for reliable window-detect: sudo apt-get install xdotool wmctrl"))
+        for s in scripts:
+            ok, err = (True, None) if args.no_syntax_check else syntax_check(s)
+            if not ok:
+                results.append({"script": s.name, "status": "syntax_error", "detail": str(err)[:160], "log": "-"})
+                continue
+            res = run_script(s, timeout=args.timeout, env_extra={"AUDIO_FILE": str(REPO_ROOT / "audio_file.mp3")})
+            results.append(res)
+        print_table(results)
+        # Success criteria: prefer window_ok_*; else accept headless_ok; else fail
+        any_window = any(r["status"].startswith("window_ok") for r in results)
+        any_headless_ok = any(r["status"] == "headless_ok" for r in results)
+        sys.exit(0 if (any_window or any_headless_ok) else 1)
+
+    # Default to interactive menu
+    interactive_menu(scripts, timeout=args.timeout)

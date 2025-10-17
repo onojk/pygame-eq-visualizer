@@ -17,28 +17,25 @@ CHANNELS = 2
 WINDOW_WIDTH, WINDOW_HEIGHT = 1200, 900
 MAX_SPOKES_BOTTOM = 240
 MAX_SPOKES_TOP = 180
-BASE_SPOKE_SIZE_BOTTOM = 5
-BASE_SPOKE_SIZE_TOP = 2
-NUM_RANDOM_LINES = 300
+BASE_SPOKE_SIZE_BOTTOM = 10
+BASE_SPOKE_SIZE_TOP = 5
+NUM_RANDOM_LINES = 100
 LINE_WIDTH = 2
 BEAT_THRESHOLD_MULTIPLIER = 1.2
-FREQUENCY_SHIFT_THRESHOLD = 1.5
+FREQUENCY_SHIFT_THRESHOLD = 2.5
 ENERGY_HISTORY = deque(maxlen=43)
 SPOKE_SCALE_FACTOR = 1.5
 ROTATION_SPEED_BASE = 0.5
 ROTATION_SPEED_BOOST = 2.0
 BURST_DURATION = 0.5
-BURST_SCALE_FACTOR = 3.0
+BURST_SCALE_FACTOR = 5.0
 BURST_COLOR_CHANGE = True
-WHITE_FLASH_DURATION = 0.2
-HIGH_FREQUENCY_THRESHOLD = 2.0
-FLASH_WINDOW_DURATION = 15.0
-MIN_FLASHES = 2
-MAX_FLASHES = 4
+WHITE_FLASH_DURATION = 0.2  # Flash duration in seconds
+WHITE_FLASH_COOLDOWN = 5.0  # Cooldown period to prevent frequent flashes
+HIGH_FREQUENCY_THRESHOLD = 7.0 #Threshold for high frequency event
 
-# Global Variables
 rainbow_offset = 0
-rotation_angle = 0
+rotation_angle = 0.0
 rotation_speed = ROTATION_SPEED_BASE
 is_fullscreen = False
 paused = False
@@ -47,8 +44,6 @@ burst_timer = 0
 flash_active = False
 flash_timer = 0
 flash_cooldown_timer = 0
-flash_counter = 0
-flash_window_timer = FLASH_WINDOW_DURATION
 
 # PyAudio Setup
 p = pyaudio.PyAudio()
@@ -97,7 +92,7 @@ def adjust_opacity(color, opacity):
 
 # Get frequency bars from audio data
 def get_frequency_bars(data, num_bars, window_height):
-    fft_data = fft(data * np.hanning(len(data)))  # Apply Hanning window before FFT
+    fft_data = fft(data)
     fft_magnitude = np.abs(fft_data)[:CHUNK//2]
     freq_bins = np.linspace(0, RATE/2, CHUNK//2)
     freq_band_limits = np.logspace(np.log10(20), np.log10(RATE/2), num_bars + 1)
@@ -115,7 +110,7 @@ def get_frequency_bars(data, num_bars, window_height):
 
 # Detect beats by analyzing bass frequencies
 def detect_beat(data, threshold_multiplier):
-    bass_energy = np.sum(np.square(data[:CHUNK//8]))  # Square to ensure proper numerical operations
+    bass_energy = np.sum(data[:CHUNK//8]**2)
     ENERGY_HISTORY.append(bass_energy)
     average_energy = np.mean(ENERGY_HISTORY) if ENERGY_HISTORY else 1
     threshold = threshold_multiplier * average_energy
@@ -124,7 +119,7 @@ def detect_beat(data, threshold_multiplier):
 
 # Detect large shifts in energy to trigger color bursts
 def detect_large_frequency_shift(data):
-    current_energy = np.sum(np.square(data))  # Square the values here for correct energy calculation
+    current_energy = np.sum(data**2)
     if len(ENERGY_HISTORY) > 1:
         energy_change = abs(current_energy - ENERGY_HISTORY[-1])
         average_energy = np.mean(ENERGY_HISTORY) if ENERGY_HISTORY else 1
@@ -133,7 +128,7 @@ def detect_large_frequency_shift(data):
 
 # Detect high-frequency spike for triggering white flash
 def detect_high_frequency_event(bars):
-    high_freq_energy = np.sum(np.square(bars[-len(bars)//4:]))  # Square for proper energy comparison
+    high_freq_energy = np.sum(bars[-len(bars)//4:]**2)  # Check the top quarter of the frequency range
     avg_energy = np.mean(bars)
     return high_freq_energy / avg_energy > HIGH_FREQUENCY_THRESHOLD
 
@@ -168,7 +163,7 @@ def draw_random_black_lines(surface, center, num_lines, max_length, min_length):
         pygame.draw.line(surface, (0, 0, 0), center, (end_x, end_y), width=LINE_WIDTH)
 
 def main():
-    global paused, is_fullscreen, WINDOW_WIDTH, WINDOW_HEIGHT, rainbow_offset, rotation_angle, rotation_speed, burst_active, burst_timer, flash_active, flash_timer, flash_cooldown_timer, flash_counter, flash_window_timer
+    global paused, is_fullscreen, WINDOW_WIDTH, WINDOW_HEIGHT, rainbow_offset, rotation_angle, rotation_speed, burst_active, burst_timer, flash_active, flash_timer, flash_cooldown_timer
 
     # Initialize Pygame window
     window = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.RESIZABLE | pygame.SRCALPHA | pygame.DOUBLEBUF)
@@ -242,24 +237,11 @@ def main():
                     if burst_timer <= 0:
                         burst_active = False
 
-                # Decrease flash window timer
-                flash_window_timer -= dt
-                if flash_window_timer <= 0:
-                    # Force minimum flashes if not met
-                    if flash_counter < MIN_FLASHES:
-                        flash_active = True
-                        flash_timer = WHITE_FLASH_DURATION
-
-                    # Reset flash window
-                    flash_counter = 0
-                    flash_window_timer = FLASH_WINDOW_DURATION
-
-                # Detect high-frequency event and trigger white flash
-                if detect_high_frequency_event(bars) and not flash_active and flash_cooldown_timer <= 0 and flash_counter < MAX_FLASHES:
+                # Detect high frequency event and trigger white flash
+                if detect_high_frequency_event(bars) and not flash_active and flash_cooldown_timer <= 0:
                     flash_active = True
                     flash_timer = WHITE_FLASH_DURATION
-                    flash_cooldown_timer = WHITE_FLASH_DURATION
-                    flash_counter += 1  # Increment flash count
+                    flash_cooldown_timer = WHITE_FLASH_COOLDOWN
 
                 # Decrease flash timer and cooldown
                 if flash_active:
