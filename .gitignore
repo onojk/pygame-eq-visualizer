@@ -1,64 +1,30 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
 *.egg-info/
-dist/
-build/
-
-# PyInstaller
-#  Usually these files are written by a python script from a template
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-.pytest_cache/
-nosetests.xml
-coverage.xml
-
-# Jupyter Notebook
-.ipynb_checkpoints/
-
-# macOS files
-.DS_Store
-
-venv/
-venv/
-*.pyc
-__pycache__/
 .venv/
-myenv/
-virtenc/
-runlogs/
-clusters*.json
-code_clusters*.json
-clusters*.csv
-code_clusters*.csv
-marks_review.json
-marks_review.csv
-consolidated_code/
-backups_code_*/
-backups_marks_*/
-__pycache__/
-*.pyc
+.env
+
+# Editor / backups
+*.bak
 *.swp
+*.swo
+backups_*/
+
+# Generated media / logs
+*.mp4
+*.wav
+*.webm
+runlogs/
+screenshots/
+
+# Accidental local package dumps
+math/
+np/
+pyaudio/
+pygame/
+random/
+sys/
+
+# Odd zero-length version files
+=\*
