@@ -1,0 +1,174 @@
+{
+  "files": [
+    {
+      "file": "3dvisNo1.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "coalescing_grid.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "emoji.py",
+      "hash": "0x883880a2ad4fd1ecad788aaa78ebeef1",
+      "tokens": 77
+    },
+    {
+      "file": "entropic_pulsefield.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "entropic_text_hud.py",
+      "hash": "0xca3aa98aa183ddedac4628af302f4e81",
+      "tokens": 723
+    },
+    {
+      "file": "entropic_visualizer.py",
+      "hash": "0x9a3a2aa8ac8fd3efae781a2b7def899d",
+      "tokens": 299
+    },
+    {
+      "file": "entropic_worm_swarm.py",
+      "hash": "0x8a3a2aa8ac8bdbefae788aab78efcf99",
+      "tokens": 561
+    },
+    {
+      "file": "experiment1.py",
+      "hash": "0x9a3a2ba8bc8fd3efae788aab716f8f99",
+      "tokens": 583
+    },
+    {
+      "file": "import_pyaudio_tool.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygameeq.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizer.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo1.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo10.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo11.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo12.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo13.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo14.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo2.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo3.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo4.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo5.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo6.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo6b.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo7.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo8.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pygamemusicvisualizerNo9.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "pyvisualizercombinedNo1.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "ReverseImpulse.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "reversevisualszNo1.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "reversevisualszNo2.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "reversevisualszNo3.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "spectrumtomidi.py",
+      "hash": "0x9a3a28a8bc8fd3eeac789a2b79efaf95",
+      "tokens": 25
+    },
+    {
+      "file": "warpfield_visualizer.py",
+      "hash": "0x9a3a2aa8bc8fd3efae789aab716f0f99",
+      "tokens": 719
+    },
+    {
+      "file": "worm_born_decay_pull.py",
+      "hash": "0x9a3a2aa8ac8bd3efae788aab79ef8b99",
+      "tokens": 565
+    }
+  ]
+}
