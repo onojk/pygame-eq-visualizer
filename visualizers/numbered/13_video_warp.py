@@ -223,10 +223,11 @@ def start_pw_record(monitor_name: str) -> subprocess.Popen:
             '--format=f32',
             '--rate=44100',
             '--channels=1',
+            '--raw',
             '-',
         ],
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         bufsize=0,
     )
     print(f"[audio] Capturing monitor source: {monitor_name}")
@@ -243,7 +244,12 @@ def start_pw_record(monitor_name: str) -> subprocess.Popen:
             with _audio_lock:
                 _latest_chunk = chunk.copy()
 
-    threading.Thread(target=_reader, daemon=True).start()
+    def _stderr_logger():
+        for line in proc.stderr:
+            print(f"[pw-record] {line.decode(errors='replace').rstrip()}", flush=True)
+
+    threading.Thread(target=_reader,        daemon=True).start()
+    threading.Thread(target=_stderr_logger, daemon=True).start()
     return proc
 
 
