@@ -29,6 +29,12 @@ RATE_FALLBACK = 48000  # used when device native rate is unavailable
 FPS           = 30     # target frame rate
 _ALPHA        = 0.3    # exponential smoothing for FFT bands (0=frozen, 1=raw)
 
+# Warp scale — applied after sqrt() compression of smoothed band values.
+# sqrt(band_mean≈0.01) ≈ 0.1; BASS_SCALE=50 → displacement ≈ 5 rad on 2π grid.
+BASS_SCALE = 50.0
+MID_SCALE  = 25.0
+HIGH_SCALE = 12.0
+
 WIDTH,  HEIGHT  = 1280, 720   # display resolution
 PLAS_W, PLAS_H  = 640,  360   # internal plasma resolution (scaled up 2×)
 
@@ -43,8 +49,9 @@ _OV_BAR_Y    = HEIGHT - 40               # top of the main amplitude bar
 _OV_BAR_H    = 20                        # main bar height
 _OV_BAND_H   = 8                         # per-band bar height
 _OV_GAP      = 3                         # gap between bars
-_OV_AMP_SCL  = 5.0                       # RMS → fill (RMS≈0.1 → ~50% width)
-_OV_BAND_SCL = 30.0                      # FFT band mean → fill
+# Scales below apply to sqrt-compressed values; sqrt(0.01)≈0.1 is the baseline.
+_OV_AMP_SCL  = 8.0   # sqrt(RMS) → fill  (RMS≈0.01 → sqrt≈0.1 → 80% at scale 8)
+_OV_BAND_SCL = 5.0   # sqrt(band) → fill (band≈0.01 → sqrt≈0.1 → 50% at scale 5)
 
 # ---------------------------------------------------------------------------
 # Coordinate grids — computed once, reused every frame.
@@ -71,12 +78,12 @@ def generate_plasma(
     mid  → cross-coupled swirl
     high → fine fast jitter
     """
-    px = _px + bass * 6.0 * np.sin(_py * 0.5 + t * 0.4)
-    py = _py + bass * 6.0 * np.cos(_px * 0.5 + t * 0.4)
-    px = px  + mid  * 2.5 * np.cos(py + t * 0.7)
-    py = py  + mid  * 2.5 * np.sin(px + t * 0.7)
-    px = px  + high * 0.8 * np.sin(px * 5.0 + t * 8.0)
-    py = py  + high * 0.8 * np.cos(py * 5.0 + t * 8.0)
+    px = _px + bass * np.sin(_py * 0.5 + t * 0.4)
+    py = _py + bass * np.cos(_px * 0.5 + t * 0.4)
+    px = px  + mid  * np.cos(py + t * 0.7)
+    py = py  + mid  * np.sin(px + t * 0.7)
+    px = px  + high * np.sin(px * 5.0 + t * 8.0)
+    py = py  + high * np.cos(py * 5.0 + t * 8.0)
 
     r = np.sin(px * 1.30 + t * 0.71) + np.sin(py * 0.90 + t * 1.13)
     g = np.sin(px * 0.70 + t * 0.93) + np.cos(py * 1.10 + t * 0.67)
@@ -104,8 +111,8 @@ def draw_overlay(
     font: pygame.font.Font,
 ) -> None:
     """Draw amplitude bars and RMS readout at the bottom of the window."""
-    # Main bar (cyan) — overall amplitude
-    amp_w = int(_OV_MAX_W * min(rms * _OV_AMP_SCL, 1.0))
+    # Main bar (cyan) — overall amplitude, sqrt-compressed
+    amp_w = int(_OV_MAX_W * min(math.sqrt(max(rms, 0.0)) * _OV_AMP_SCL, 1.0))
     pygame.draw.rect(surface, (0, 255, 255),
                      (_OV_X0, _OV_BAR_Y, max(amp_w, 1), _OV_BAR_H))
 
@@ -117,7 +124,7 @@ def draw_overlay(
         (bass, (255,  60,  60)),   # red   — bass
     ):
         y -= _OV_BAND_H
-        bw = int(_OV_MAX_W * min(value * _OV_BAND_SCL, 1.0))
+        bw = int(_OV_MAX_W * min(math.sqrt(max(value, 0.0)) * _OV_BAND_SCL, 1.0))
         pygame.draw.rect(surface, color, (_OV_X0, y, max(bw, 1), _OV_BAND_H))
         y -= _OV_GAP
 
@@ -263,10 +270,11 @@ def main() -> None:
     clock  = pygame.time.Clock()
     font   = pygame.font.SysFont(None, 20)
 
-    t      = 0.0
-    bass_s = mid_s = high_s = 0.0
-    frame  = 0
-    running = True
+    t         = 0.0
+    bass_s    = mid_s = high_s = 0.0
+    prev_mono = np.zeros(CHUNK, dtype=np.float32)
+    frame     = 0
+    running   = True
 
     try:
         while running:
@@ -278,8 +286,16 @@ def main() -> None:
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     running = False
 
-            audio_chunk, _ = stream.read(CHUNK)
-            mono   = audio_chunk[:, 0]
+            # Non-blocking read: only pull if a full chunk is ready.
+            # Falls back to the previous chunk so the render loop never stalls.
+            try:
+                if stream.read_available >= CHUNK:
+                    audio_chunk, _ = stream.read(CHUNK)
+                    prev_mono = audio_chunk[:, 0]
+            except Exception:
+                pass
+            mono = prev_mono
+
             rms    = float(np.sqrt(np.mean(mono ** 2)))
             bass_s, mid_s, high_s, bass_r, mid_r, high_r = _smooth_bands(
                 mono, rate, bass_s, mid_s, high_s,
@@ -291,7 +307,12 @@ def main() -> None:
                     f"  smooth: B={bass_s:.4f} M={mid_s:.4f} H={high_s:.4f}"
                 )
 
-            plasma = generate_plasma(t, bass_s, mid_s, high_s)
+            # Compress dynamic range with sqrt before scaling to displacement.
+            bass_v = math.sqrt(max(bass_s, 0.0)) * BASS_SCALE
+            mid_v  = math.sqrt(max(mid_s,  0.0)) * MID_SCALE
+            high_v = math.sqrt(max(high_s, 0.0)) * HIGH_SCALE
+
+            plasma = generate_plasma(t, bass_v, mid_v, high_v)
             surf   = array_to_surface(plasma)
             scaled = pygame.transform.scale(surf, (WIDTH, HEIGHT))
             window.blit(scaled, (0, 0))
