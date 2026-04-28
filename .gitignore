@@ -9,7 +9,10 @@ __pycache__/
 *.bak
 *.swp
 *.swo
+*.save
+nano.*.save
 backups_*/
+*~
 
 # Generated media / logs
 *.mp4
@@ -18,13 +21,31 @@ backups_*/
 runlogs/
 screenshots/
 
-# Accidental local package dumps
+# Accidental local package dumps (also catch top-level files with these names)
+math
+np
+pyaudio
+pygame
+random
+sys
 math/
 np/
 pyaudio/
 pygame/
 random/
 sys/
+
+# Built native binaries (build with `make` in native/)
+native/entropic_worms
+
+# Recorded run data — large, regenerable
+spectrum_data.txt
+alignment.json
+spectrum_output.mid
+
+# OS junk
+.DS_Store
+Thumbs.db
 
 # Odd zero-length version files
 =\*
