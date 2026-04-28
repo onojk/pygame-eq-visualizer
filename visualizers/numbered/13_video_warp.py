@@ -4,22 +4,24 @@
 No video file required. Generates a flowing plasma background each frame
 and distorts it in real time using live audio FFT bands.
 
-Audio source: PulseAudio monitor (system audio — whatever is playing
-  through the speakers). Requires a monitor source to be visible to
-  sounddevice; exits with an error and instructions if none is found.
-  Override with AUDIO_INPUT_DEVICE env var (device index or name substring).
+Audio source: PipeWire monitor captured via pw-record subprocess.
+  Discovers the monitor source automatically using pactl; starts pw-record
+  as a child process and reads raw float32 PCM from its stdout on a daemon
+  thread. No PortAudio / sounddevice in the hot path — zero playback interference.
+  Override target with AUDIO_INPUT_DEVICE env var (passed directly to pw-record --target).
 """
 
 from __future__ import annotations
 
 import math
 import os
+import shutil
+import subprocess
 import sys
 import threading
 
 import numpy as np
 import pygame
-import sounddevice as sd
 from scipy.fftpack import fft
 
 # ---------------------------------------------------------------------------
@@ -135,115 +137,114 @@ def draw_overlay(
 
 
 # ---------------------------------------------------------------------------
-# Audio callback — runs on sounddevice's internal thread, not the render thread.
-# _latest_chunk stores the most recent CHUNK mono samples; protected by a lock
-# so the render thread can copy it without racing the callback.
+# Shared audio state — written by the reader thread, read by the render loop.
+# _latest_chunk always holds the most recent CHUNK mono float32 samples.
 # ---------------------------------------------------------------------------
 _audio_lock   = threading.Lock()
 _latest_chunk = np.zeros(CHUNK, dtype='float32')
 
 
-def _audio_callback(indata, frames, time_info, status):
-    global _latest_chunk
-    if status:
-        print(f'[audio] callback status: {status}', flush=True)
-    with _audio_lock:
-        _latest_chunk = indata[:, 0].copy()
-
-
 # ---------------------------------------------------------------------------
-# Audio — monitor detection (fail loud)
+# Audio — pw-record subprocess capture
 # ---------------------------------------------------------------------------
 
-def _device_rate(info: dict) -> int:
-    """Extract native sample rate from device info; fall back to RATE_FALLBACK."""
-    try:
-        r = int(info['default_samplerate'])
-        return r if r > 0 else RATE_FALLBACK
-    except (KeyError, ValueError, TypeError):
-        return RATE_FALLBACK
-
-
-def find_monitor_device() -> tuple[int, dict]:
+def find_monitor_source() -> str:
     """
-    Return (device_index, device_info) for system-audio capture.
+    Return a PipeWire monitor source name suitable for pw-record --target.
 
     Resolution order:
-      1. AUDIO_INPUT_DEVICE env var — checked first, skips scanning entirely.
-         - Digit string  → validate that index, fail loud if invalid.
-         - Other string  → case-insensitive substring match across all devices.
-      2. Scan all devices for a name containing 'monitor' or 'pulse'.
-         'pulse' is the PipeWire→PulseAudio bridge; routing is done via
-         pavucontrol's Recording tab after the stream is open.
-      3. Nothing found → print instructions and sys.exit(1).
+      1. AUDIO_INPUT_DEVICE env var — used directly as the target name.
+      2. Parse 'pactl list sources short': prefer RUNNING monitor lines,
+         fall back to any monitor line. Among candidates, prefer 'Speaker'
+         over HDMI/Headphones. Fail loud if nothing found.
     """
-    override = os.environ.get("AUDIO_INPUT_DEVICE")
-
-    # --- env var path ---
+    override = os.environ.get('AUDIO_INPUT_DEVICE')
     if override is not None:
-        if override.isdigit():
-            idx = int(override)
-            try:
-                info = dict(sd.query_devices(idx))
-                print(f"[audio] AUDIO_INPUT_DEVICE={override}: [{idx}] {info['name']}")
-                return idx, info
-            except (ValueError, sd.PortAudioError):
-                print(
-                    f"[audio] ERROR: AUDIO_INPUT_DEVICE={override} is not a "
-                    "valid device index on this system.",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
+        return override
 
-        # substring match
-        for i, info in enumerate(sd.query_devices()):
-            if override.lower() in info['name'].lower() and info['max_input_channels'] > 0:
-                print(f"[audio] AUDIO_INPUT_DEVICE={override!r}: [{i}] {info['name']}")
-                return i, dict(info)
+    try:
+        out = subprocess.check_output(
+            ['pactl', 'list', 'sources', 'short'],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        print(f"[audio] ERROR: pactl failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    running, fallback = [], []
+    for line in out.splitlines():
+        cols = line.split()
+        if len(cols) < 2:
+            continue
+        name = cols[1]
+        if 'monitor' not in name.lower():
+            continue
+        (running if cols[-1] == 'RUNNING' else fallback).append(name)
+
+    candidates = running or fallback
+    if not candidates:
         print(
-            f"[audio] ERROR: AUDIO_INPUT_DEVICE={override!r} matched no device.\n"
-            f"  Run with no AUDIO_INPUT_DEVICE set to see available devices.",
+            "[audio] ERROR: No monitor source found via pactl.\n"
+            "  pactl output:\n" + "\n".join(f"    {l}" for l in out.splitlines()),
             file=sys.stderr,
         )
         sys.exit(1)
 
-    # --- auto-scan path ---
-    for i, info in enumerate(sd.query_devices()):
-        name = info['name'].lower()
-        if info['max_input_channels'] > 0 and (name == 'pulse' or 'monitor' in name):
-            print(f"[audio] System-audio source: [{i}] {info['name']}")
-            return i, dict(info)
+    def _score(name: str) -> int:
+        n = name.lower()
+        if 'speaker' in n:
+            return 0
+        if 'hdmi' in n or 'headphone' in n:
+            return 2
+        return 1
 
-    # Print available devices to help the user pick one manually
-    print("\n[audio] Available input devices:", file=sys.stderr)
-    for i, info in enumerate(sd.query_devices()):
-        if info['max_input_channels'] > 0:
-            print(f"  [{i}] {info['name']}", file=sys.stderr)
+    candidates.sort(key=_score)
+    return candidates[0]
 
-    print(
-        "\n[audio] ERROR: No monitor or pulse source found.\n"
-        "  To capture system audio:\n"
-        "      pactl load-module module-loopback latency_msec=1\n"
-        "  Or open pavucontrol → Recording tab and route this app's input to\n"
-        "  'Monitor of <your output device>'.\n"
-        "  On PipeWire, try: AUDIO_INPUT_DEVICE=pulse python3 main.py --run 13_video_warp.py\n"
-        "  Or set AUDIO_INPUT_DEVICE=<index> using one of the indices listed above.\n",
-        file=sys.stderr,
+
+def start_pw_record(monitor_name: str) -> subprocess.Popen:
+    """
+    Spawn pw-record capturing monitor_name as raw float32 mono at 44100 Hz.
+    Starts a daemon reader thread that keeps _latest_chunk current.
+    Returns the Popen object so the caller can terminate it on exit.
+    """
+    if not shutil.which('pw-record'):
+        print(
+            "[audio] ERROR: pw-record not found. "
+            "Install with: sudo apt install pipewire-bin",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    proc = subprocess.Popen(
+        [
+            'pw-record',
+            f'--target={monitor_name}',
+            '--format=f32',
+            '--rate=44100',
+            '--channels=1',
+            '-',
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        bufsize=0,
     )
-    sys.exit(1)
+    print(f"[audio] Capturing monitor source: {monitor_name}")
+    print(f"[audio] pw-record PID: {proc.pid}")
 
+    def _reader():
+        global _latest_chunk
+        read_bytes = CHUNK * 4  # float32 = 4 bytes per sample
+        while True:
+            raw = proc.stdout.read(read_bytes)
+            if not raw or len(raw) < read_bytes:
+                break
+            chunk = np.frombuffer(raw, dtype=np.float32)
+            with _audio_lock:
+                _latest_chunk = chunk.copy()
 
-def open_audio_stream(device_index: int, rate: int) -> sd.InputStream:
-    stream = sd.InputStream(
-        device=device_index,
-        samplerate=rate,
-        channels=1,
-        blocksize=CHUNK,
-        dtype='float32',
-        callback=_audio_callback,
-    )
-    stream.start()
-    return stream
+    threading.Thread(target=_reader, daemon=True).start()
+    return proc
 
 
 def _smooth_bands(
@@ -278,10 +279,9 @@ def _smooth_bands(
 def main() -> None:
     debug = os.environ.get('DEBUG_AUDIO', '') == '1'
 
-    monitor_idx, dev_info = find_monitor_device()   # exits 1 if no monitor found
-    rate                  = _device_rate(dev_info)
-    print(f"[audio] Using device [{monitor_idx}] '{dev_info['name']}' at {rate} Hz")
-    stream = open_audio_stream(monitor_idx, rate)
+    monitor_name = find_monitor_source()   # exits 1 if no monitor found
+    proc         = start_pw_record(monitor_name)
+    rate         = 44100                   # matches --rate flag passed to pw-record
 
     pygame.init()
     pygame.display.set_caption("Plasma Warp")
@@ -334,8 +334,11 @@ def main() -> None:
 
             t += dt
     finally:
-        stream.stop()
-        stream.close()
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
         pygame.quit()
 
 
