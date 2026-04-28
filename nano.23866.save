@@ -1,0 +1,128 @@
+import numpy as np import pyaudio import pygame from scipy.fftpack 
+import fft
+# Pygame setup
+pygame.init()
+# Constants
+CHUNK = 1024 RATE = 44100 BAR_SEGMENTS = 20 # Number of segments for 
+each bar (for ghosting effect) GHOST_DECAY = 0.02 # Slower decay for 
+ghosting SEGMENT_HEIGHT_RATIO = 0.9
+# Sensitivity Controls
+LOW_FREQ_BOOST = 1.8 MID_FREQ_BOOST = 2.5 HIGH_FREQ_BOOST = 4.0 
+MOVEMENT_SCALING = 2.0 SILENCE_THRESHOLD = 50
+# PyAudio setup
+p = pyaudio.PyAudio() stream = p.open(format=pyaudio.paInt16, 
+                channels=2, rate=RATE, input=True, 
+                frames_per_buffer=CHUNK)
+# Initialize previous bar heights for ghosting effect
+previous_bar_heights = np.zeros(10) # Set the size for 10 bars 
+ghost_heights = np.zeros(10) # Set the size for 10 bars
+# Function Function to create a rainbow color for each bar
+def get_rainbow_color(index, total_bars, offset): hue = (index / 
+    total_bars + offset) % 1.0 # Use the index for unique hues color 
+    = pygame.Color(0) # Create a blank color color.hsva = (hue * 360, 
+    100, 100) # Set the hue, saturation, and value return (color.r, 
+    color.g, color.b) # Return the RGB tuple
+# Function to convert FFT data to bar heights with sensitivity 
+# adjustments
+def get_frequency_bars(data, num_bars, max_height): fft_data = 
+    np.abs(fft(data))[:CHUNK // 2] # FFT and keep only positive 
+    frequencies bar_heights = np.zeros(num_bars) chunk_size = 
+    len(fft_data) // num_bars if np.mean(np.abs(data)) < 
+    SILENCE_THRESHOLD:
+        return np.zeros(num_bars, dtype=int) # All bars go down when 
+        there's no sound
+    for i in range(num_bars): freq_range = i / num_bars avg_value = 
+        np.mean(fft_data[i * chunk_size:(i + 1) * chunk_size])
+        # Frequency sensitivity adjustments
+        if freq_range < 0.2: # Low frequencies (left side) 
+            sensitivity_boost = LOW_FREQ_BOOST
+        elif freq_range >= 0.2 and freq_range <= 0.6: # Mid 
+        frequencies
+            sensitivity_boost = MID_FREQ_BOOST else: # High 
+        frequencies (right side)
+            sensitivity_boost = HIGH_FREQ_BOOST bar_heights[i] = 
+        avg_value * sensitivity_boost
+    # Apply nonlinear scaling to enhance movement
+    bar_heights = np.power(bar_heights, MOVEMENT_SCALING)
+    # Normalize bar heights to fit in window
+    max_value = np.max(bar_heights) if max_value > 0: bar_heights = 
+        np.clip(bar_heights / max_value * max_height, 0, 
+        max_height).astype(int)
+    else: bar_heights = np.zeros(num_bars, dtype=int)
+    # Apply smoothing to the bar heights (ghosting effect)
+    global previous_bar_heights smoothed_bar_heights = (0.6 * 
+    previous_bar_heights + 0.4 * bar_heights) previous_bar_heights = 
+    smoothed_bar_heights return smoothed_bar_heights.astype(int)
+# Main loop for real-time visualization with ghosting effect
+def main(): global ghost_heights # Ensure ghost_heights is globally 
+    accessible global WINDOW_WIDTH, WINDOW_HEIGHT # For window 
+    resizing WINDOW_WIDTH, WINDOW_HEIGHT = 800, 600 # Default window 
+    size window = pygame.display.set_mode((WINDOW_WIDTH, 
+    WINDOW_HEIGHT), pygame.RESIZABLE) 
+    pygame.display.set_caption("Sound Visualizer") rainbow_offset = 0 
+    # Offset for cycling rainbow colors
+    fullscreen = False # Track if we are in full-screen mode try: 
+        running = True while running:
+            for event in pygame.event.get(): if event.type == 
+                pygame.QUIT:
+                    running = False elif event.type == 
+                pygame.VIDEORESIZE:
+                    # Adjust window size and number of bars when 
+                    # resized
+                    WINDOW_WIDTH, WINDOW_HEIGHT = event.w, event.h 
+                    window = pygame.display.set_mode((WINDOW_WIDTH, 
+                    WINDOW_HEIGHT), pygame.RESIZABLE)
+                elif event.type == pygame.KEYDOWN: if event.key == 
+                    pygame.K_F11:
+                        fullscreen = not fullscreen if fullscreen: 
+                            window = 
+                            pygame.display.set_mode((WINDOW_WIDTH, 
+                            WINDOW_HEIGHT), pygame.FULLSCREEN)
+                        else: window = 
+                            pygame.display.set_mode((WINDOW_WIDTH, 
+                            WINDOW_HEIGHT), pygame.RESIZABLE)
+            # Calculate number of bars based on window width
+            NUM_BARS = 10 # Fixed at 10 bars for now BAR_WIDTH = 
+            WINDOW_WIDTH // NUM_BARS
+            # Reinitialize ghost heights and previous bar heights to 
+            # match the number of bars
+            global ghost_heights, previous_bar_heights if 
+            len(ghost_heights) != NUM_BARS:
+                ghost_heights = np.zeros(NUM_BARS) 
+                previous_bar_heights = np.zeros(NUM_BARS) # 
+                Reinitialize to the correct size
+            # Clear the window with a black background
+            window.fill((0, 0, 0))
+            # Read audio data from PyAudio stream
+            data = np.frombuffer(stream.read(CHUNK), dtype=np.int16)
+            # Get frequency bars
+            bars = get_frequency_bars(data, NUM_BARS, WINDOW_HEIGHT)
+            # Update the ghost effect
+            ghost_heights = np.maximum(ghost_heights - GHOST_DECAY * 
+            WINDOW_HEIGHT, bars)
+            # Draw bars
+            for i, bar_height in enumerate(bars): x = i * BAR_WIDTH 
+                color = get_rainbow_color(i, NUM_BARS, 
+                rainbow_offset) # Get color for the bar
+                # Draw the segments of the bar for ghosting
+                segment_height = WINDOW_HEIGHT // BAR_SEGMENTS for j 
+                in range(BAR_SEGMENTS):
+                    segment_top = WINDOW_HEIGHT - j * segment_height 
+                    segment_bottom = segment_top - int(segment_height 
+                    * SEGMENT_HEIGHT_RATIO) if segment_bottom < 
+                    WINDOW_HEIGHT - ghost_heights[i]:
+                        break # Stop drawing if this segment is below 
+                        the ghost bar's height
+                    pygame.draw.rect(window, color, (x, 
+                    segment_bottom, BAR_WIDTH - 2, segment_height * 
+                    SEGMENT_HEIGHT_RATIO))
+            # Update the display
+            pygame.display.flip()
+            # Increment the rainbow offset for cycling colors
+            rainbow_offset += 0.01
+            # Control the frame rate
+            pygame.time.Clock().tick(60) except KeyboardInterrupt:
+        # Cleanup
+        stream.stop_stream() stream.close() p.terminate() 
+        pygame.quit()
+if __name__ == "__main__": main()

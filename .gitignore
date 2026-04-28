@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+
+# Editor / backups
+*.bak
+*.swp
+*.swo
+backups_*/
+
+# Generated media / logs
+*.mp4
+*.wav
+*.webm
+runlogs/
+screenshots/
+
+# Accidental local package dumps
+math/
+np/
+pyaudio/
+pygame/
+random/
+sys/
+
+# Odd zero-length version files
+=\*
+LONG_MASTER.wav
+frames_dialup_dawn/

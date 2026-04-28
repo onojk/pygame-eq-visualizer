@@ -1,0 +1,125 @@
+import pyaudio
+import numpy as np
+from OpenGL.GL import *
+from OpenGL.GLUT import *
+from OpenGL.GLU import *
+import math
+
+# Audio Input Setup
+p = pyaudio.PyAudio()
+
+# Audio constants
+RATE = 44100
+CHUNK = 1024
+CHANNELS = 1
+
+# Open audio stream
+def get_audio_stream():
+    def get_input_device_index():
+        try:
+            return p.get_default_input_device_info()['index']
+        except IOError:
+            print("No default input device found.")
+            sys.exit(1)
+
+    input_device_index = get_input_device_index()
+    stream = p.open(format=pyaudio.paInt16,
+                    channels=CHANNELS,
+                    rate=RATE,
+                    input=True,
+                    input_device_index=input_device_index,
+                    frames_per_buffer=CHUNK)
+    return stream
+
+stream = get_audio_stream()
+
+# OpenGL Variables
+pipes = []
+pipe_count = 50
+
+# Pipe Structure
+class Pipe:
+    def __init__(self, x, y, z, length, radius, color):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.length = length
+        self.radius = radius
+        self.color = color
+
+    def draw(self):
+        glPushMatrix()
+        glTranslatef(self.x, self.y, self.z)
+        glColor3f(*self.color)
+        glutSolidCylinder(self.radius, self.length, 20, 20)
+        glPopMatrix()
+
+# Initialize Pipes
+def create_pipes():
+    global pipes
+    for i in range(pipe_count):
+        x = np.random.uniform(-5, 5)
+        y = np.random.uniform(-5, 5)
+        z = -i * 2
+        length = 1.0
+        radius = 0.1
+        color = (0.2, 0.6, 1.0)
+        pipes.append(Pipe(x, y, z, length, radius, color))
+
+# Update Pipe Dynamics
+def update_pipes(audio_data):
+    global pipes
+    amplitude = np.abs(audio_data).mean() / 1000.0  # Normalize amplitude
+    spectrum = np.abs(np.fft.fft(audio_data))[:CHUNK // 2]  # FFT spectrum
+
+    for i, pipe in enumerate(pipes):
+        pipe.length = 1.0 + amplitude * np.sin(i)
+        pipe.radius = 0.1 + spectrum[i % len(spectrum)] / 5000.0
+        pipe.color = (amplitude % 1, np.sin(i / 10), np.cos(i / 10))
+
+# Audio Processing
+def get_audio_data():
+    data = np.frombuffer(stream.read(CHUNK, exception_on_overflow=False), dtype=np.int16)
+    return data
+
+# OpenGL Setup
+def init_opengl():
+    glClearColor(0.0, 0.0, 0.0, 1.0)
+    glEnable(GL_DEPTH_TEST)
+    glMatrixMode(GL_PROJECTION)
+    gluPerspective(45, 800/600, 0.1, 50.0)
+    glMatrixMode(GL_MODELVIEW)
+
+# Display Callback
+def display():
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+    glLoadIdentity()
+    gluLookAt(0, 0, 10, 0, 0, 0, 0, 1, 0)
+
+    audio_data = get_audio_data()
+    update_pipes(audio_data)
+
+    for pipe in pipes:
+        pipe.draw()
+
+    glutSwapBuffers()
+
+# Idle Callback
+def idle():
+    glutPostRedisplay()
+
+# Main Function
+def main():
+    create_pipes()
+    glutInit()
+    glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH)
+    glutInitWindowSize(800, 600)
+    glutCreateWindow("3D Music Visualizer")
+    init_opengl()
+    glutDisplayFunc(display)
+    glutIdleFunc(idle)
+    glutMainLoop()
+
+if __name__ == "__main__":
+    main()
+

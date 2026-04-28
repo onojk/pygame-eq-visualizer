@@ -1,0 +1,19 @@
+[2:v]scale=3840:2160:flags=lanczos,setsar=1,format=rgba[BG];
+
+[0:v]fps=24,scale=4096:2304:flags=lanczos,setsar=1,format=rgba[p0];
+[p0]rotate=angle='0.03*sin(2*PI*t/4)+0.02*sin(2*PI*t/5)':bilinear=1:fillcolor=black@0.0[p1];
+[p1]crop=3840:2160:
+    x=(in_w-3840)/2 + 40*(sin(2*PI*t/5)+0.5*sin(2*PI*t/4)+0.3*sin(2*PI*t/10)):
+    y=(in_h-2160)/2 + 30*(sin(2*PI*t/6)+0.5*sin(2*PI*t/4)+0.2*sin(2*PI*t/10))[PAT];
+
+[1:v]fps=12,format=rgba,alphaextract,format=gray,
+     scale=3840:2160:flags=lanczos,
+     gblur=sigma=1.2,lut=y='if(gte(val,40),255,0)'[mA];
+
+[PAT][mA]alphamerge[FLM];
+[FLM]format=rgba,colorchannelmixer=aa=0.55[FLM2];
+
+[BG][FLM2]overlay=
+   x=(main_w-overlay_w)/2 + 8*(sin(2*PI*t/5)+0.5*sin(2*PI*t/4)+0.3*sin(2*PI*t/10)):
+   y=(main_h-overlay_h)/2 + 6*(sin(2*PI*t/6)+0.5*sin(2*PI*t/4)+0.2*sin(2*PI*t/10)),
+   format=yuv420p[VOUT]
