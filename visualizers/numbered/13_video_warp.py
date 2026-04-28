@@ -27,6 +27,7 @@ from scipy.fftpack import fft
 CHUNK         = 1024   # audio buffer (samples)
 RATE_FALLBACK = 48000  # used when device native rate is unavailable
 FPS           = 30     # target frame rate
+_ALPHA        = 0.3    # exponential smoothing for FFT bands (0=frozen, 1=raw)
 
 WIDTH,  HEIGHT  = 1280, 720   # display resolution
 PLAS_W, PLAS_H  = 640,  360   # internal plasma resolution (scaled up 2×)
@@ -46,22 +47,34 @@ _py = np.linspace(0.0, TAU, PLAS_H, dtype=np.float32).reshape(PLAS_H, 1)
 # Plasma generator
 # ---------------------------------------------------------------------------
 
-def generate_plasma(t: float) -> np.ndarray:
+def generate_plasma(
+    t: float,
+    bass: float = 0.0,
+    mid: float = 0.0,
+    high: float = 0.0,
+) -> np.ndarray:
+    """Return (PLAS_H, PLAS_W, 3) uint8 RGB array, warped by audio bands.
+
+    bass → large slow displacement of both axes
+    mid  → cross-coupled swirl
+    high → fine fast jitter
     """
-    Return (PLAS_H, PLAS_W, 3) uint8 RGB array.
-    Three independent sine-field layers give R, G, B channels.
-    Values cycle smoothly with t (time in seconds).
-    """
-    r = np.sin(_px * 1.30 + t * 0.71) + np.sin(_py * 0.90 + t * 1.13)
-    g = np.sin(_px * 0.70 + t * 0.93) + np.cos(_py * 1.10 + t * 0.67)
-    b = np.cos(_px * 1.10 + t * 0.53) + np.sin(_py * 0.80 + t * 1.31)
-    # Each array is (PLAS_H, PLAS_W), values in [-2, 2]; map to [0, 255]
+    px = _px + bass * 6.0 * np.sin(_py * 0.5 + t * 0.4)
+    py = _py + bass * 6.0 * np.cos(_px * 0.5 + t * 0.4)
+    px = px  + mid  * 2.5 * np.cos(py + t * 0.7)
+    py = py  + mid  * 2.5 * np.sin(px + t * 0.7)
+    px = px  + high * 0.8 * np.sin(px * 5.0 + t * 8.0)
+    py = py  + high * 0.8 * np.cos(py * 5.0 + t * 8.0)
+
+    r = np.sin(px * 1.30 + t * 0.71) + np.sin(py * 0.90 + t * 1.13)
+    g = np.sin(px * 0.70 + t * 0.93) + np.cos(py * 1.10 + t * 0.67)
+    b = np.cos(px * 1.10 + t * 0.53) + np.sin(py * 0.80 + t * 1.31)
     k = 255.0 / 4.0
     return np.stack([
         ((r + 2.0) * k).astype(np.uint8),
         ((g + 2.0) * k).astype(np.uint8),
         ((b + 2.0) * k).astype(np.uint8),
-    ], axis=2)  # (PLAS_H, PLAS_W, 3)
+    ], axis=2)
 
 
 def array_to_surface(arr: np.ndarray) -> pygame.Surface:
@@ -164,43 +177,75 @@ def open_audio_stream(device_index: int, rate: int) -> sd.InputStream:
     return stream
 
 
+def _smooth_bands(
+    chunk: np.ndarray,
+    rate: int,
+    bass_s: float,
+    mid_s: float,
+    high_s: float,
+) -> tuple[float, float, float]:
+    """FFT the mono float32 chunk; return exponentially smoothed bass/mid/high."""
+    N        = len(chunk)
+    spectrum = np.abs(fft(chunk)[:N // 2]) * (2.0 / N)
+    freqs    = np.arange(N // 2) * (rate / N)
+
+    bass_raw = float(spectrum[freqs <  200].mean()) if (freqs <  200).any() else 0.0
+    mid_mask = (freqs >= 200) & (freqs < 2000)
+    mid_raw  = float(spectrum[mid_mask].mean())     if mid_mask.any()       else 0.0
+    high_raw = float(spectrum[freqs >= 2000].mean()) if (freqs >= 2000).any() else 0.0
+
+    return (
+        bass_s + _ALPHA * (bass_raw - bass_s),
+        mid_s  + _ALPHA * (mid_raw  - mid_s),
+        high_s + _ALPHA * (high_raw - high_s),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    # Detect monitor source before opening a window — fail loud if absent.
     monitor_idx, dev_info = find_monitor_device()   # exits 1 if no monitor found
     rate                  = _device_rate(dev_info)
     print(f"[audio] Using device [{monitor_idx}] '{dev_info['name']}' at {rate} Hz")
-    # Stream opened in next commit when FFT warp is wired up.
+    stream = open_audio_stream(monitor_idx, rate)
 
     pygame.init()
     pygame.display.set_caption("Plasma Warp")
     window = pygame.display.set_mode((WIDTH, HEIGHT), pygame.DOUBLEBUF)
     clock  = pygame.time.Clock()
 
-    t       = 0.0
+    t      = 0.0
+    bass_s = mid_s = high_s = 0.0
     running = True
 
-    while running:
-        dt = clock.tick(FPS) / 1000.0
+    try:
+        while running:
+            dt = clock.tick(FPS) / 1000.0
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                running = False
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    running = False
 
-        plasma = generate_plasma(t)
-        surf   = array_to_surface(plasma)
-        scaled = pygame.transform.scale(surf, (WIDTH, HEIGHT))
-        window.blit(scaled, (0, 0))
-        pygame.display.flip()
+            audio_chunk, _ = stream.read(CHUNK)
+            bass_s, mid_s, high_s = _smooth_bands(
+                audio_chunk[:, 0], rate, bass_s, mid_s, high_s,
+            )
 
-        t += dt
+            plasma = generate_plasma(t, bass_s, mid_s, high_s)
+            surf   = array_to_surface(plasma)
+            scaled = pygame.transform.scale(surf, (WIDTH, HEIGHT))
+            window.blit(scaled, (0, 0))
+            pygame.display.flip()
 
-    pygame.quit()
+            t += dt
+    finally:
+        stream.stop()
+        stream.close()
+        pygame.quit()
 
 
 if __name__ == "__main__":
