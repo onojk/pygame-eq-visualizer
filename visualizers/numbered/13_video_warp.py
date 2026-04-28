@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+import threading
 
 import numpy as np
 import pygame
@@ -134,6 +135,23 @@ def draw_overlay(
 
 
 # ---------------------------------------------------------------------------
+# Audio callback — runs on sounddevice's internal thread, not the render thread.
+# _latest_chunk stores the most recent CHUNK mono samples; protected by a lock
+# so the render thread can copy it without racing the callback.
+# ---------------------------------------------------------------------------
+_audio_lock   = threading.Lock()
+_latest_chunk = np.zeros(CHUNK, dtype='float32')
+
+
+def _audio_callback(indata, frames, time_info, status):
+    global _latest_chunk
+    if status:
+        print(f'[audio] callback status: {status}', flush=True)
+    with _audio_lock:
+        _latest_chunk = indata[:, 0].copy()
+
+
+# ---------------------------------------------------------------------------
 # Audio — monitor detection (fail loud)
 # ---------------------------------------------------------------------------
 
@@ -222,6 +240,7 @@ def open_audio_stream(device_index: int, rate: int) -> sd.InputStream:
         channels=1,
         blocksize=CHUNK,
         dtype='float32',
+        callback=_audio_callback,
     )
     stream.start()
     return stream
@@ -270,11 +289,10 @@ def main() -> None:
     clock  = pygame.time.Clock()
     font   = pygame.font.SysFont(None, 20)
 
-    t         = 0.0
-    bass_s    = mid_s = high_s = 0.0
-    prev_mono = np.zeros(CHUNK, dtype=np.float32)
-    frame     = 0
-    running   = True
+    t      = 0.0
+    bass_s = mid_s = high_s = 0.0
+    frame  = 0
+    running = True
 
     try:
         while running:
@@ -286,15 +304,10 @@ def main() -> None:
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     running = False
 
-            # Non-blocking read: only pull if a full chunk is ready.
-            # Falls back to the previous chunk so the render loop never stalls.
-            try:
-                if stream.read_available >= CHUNK:
-                    audio_chunk, _ = stream.read(CHUNK)
-                    prev_mono = audio_chunk[:, 0]
-            except Exception:
-                pass
-            mono = prev_mono
+            # Grab the latest chunk deposited by the callback thread.
+            # If the callback hasn't fired yet, _latest_chunk is all zeros — fine.
+            with _audio_lock:
+                mono = _latest_chunk.copy()
 
             rms    = float(np.sqrt(np.mean(mono ** 2)))
             bass_s, mid_s, high_s, bass_r, mid_r, high_r = _smooth_bands(
