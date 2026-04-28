@@ -129,7 +129,7 @@ def find_monitor_device() -> tuple[int, dict]:
     # --- auto-scan path ---
     for i, info in enumerate(sd.query_devices()):
         name = info['name'].lower()
-        if info['max_input_channels'] > 0 and ('monitor' in name or 'pulse' in name):
+        if info['max_input_channels'] > 0 and (name == 'pulse' or 'monitor' in name):
             print(f"[audio] System-audio source: [{i}] {info['name']}")
             return i, dict(info)
 
