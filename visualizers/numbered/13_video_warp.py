@@ -35,6 +35,18 @@ PLAS_W, PLAS_H  = 640,  360   # internal plasma resolution (scaled up 2×)
 TAU = math.tau  # 2π
 
 # ---------------------------------------------------------------------------
+# Overlay — amplitude bars drawn on every frame for visual diagnostics
+# ---------------------------------------------------------------------------
+_OV_MAX_W    = int(WIDTH * 0.8)           # max bar width in pixels
+_OV_X0       = (WIDTH - _OV_MAX_W) // 2  # left edge of all bars
+_OV_BAR_Y    = HEIGHT - 40               # top of the main amplitude bar
+_OV_BAR_H    = 20                        # main bar height
+_OV_BAND_H   = 8                         # per-band bar height
+_OV_GAP      = 3                         # gap between bars
+_OV_AMP_SCL  = 5.0                       # RMS → fill (RMS≈0.1 → ~50% width)
+_OV_BAND_SCL = 30.0                      # FFT band mean → fill
+
+# ---------------------------------------------------------------------------
 # Coordinate grids — computed once, reused every frame.
 # _px is (1, PLAS_W) and _py is (PLAS_H, 1) so arithmetic between them
 # broadcasts to (PLAS_H, PLAS_W) without an explicit meshgrid.
@@ -81,6 +93,37 @@ def array_to_surface(arr: np.ndarray) -> pygame.Surface:
     """Convert (H, W, 3) uint8 ndarray → pygame Surface."""
     # surfarray.make_surface expects (W, H, 3)
     return pygame.surfarray.make_surface(np.ascontiguousarray(arr.swapaxes(0, 1)))
+
+
+def draw_overlay(
+    surface: pygame.Surface,
+    rms: float,
+    bass: float,
+    mid: float,
+    high: float,
+    font: pygame.font.Font,
+) -> None:
+    """Draw amplitude bars and RMS readout at the bottom of the window."""
+    # Main bar (cyan) — overall amplitude
+    amp_w = int(_OV_MAX_W * min(rms * _OV_AMP_SCL, 1.0))
+    pygame.draw.rect(surface, (0, 255, 255),
+                     (_OV_X0, _OV_BAR_Y, max(amp_w, 1), _OV_BAR_H))
+
+    # Band bars stacked above main bar: bass top, mid middle, high bottom
+    y = _OV_BAR_Y - _OV_GAP
+    for value, color in (
+        (high, (60,  120, 255)),   # blue  — high
+        (mid,  (0,   220,   0)),   # green — mid
+        (bass, (255,  60,  60)),   # red   — bass
+    ):
+        y -= _OV_BAND_H
+        bw = int(_OV_MAX_W * min(value * _OV_BAND_SCL, 1.0))
+        pygame.draw.rect(surface, color, (_OV_X0, y, max(bw, 1), _OV_BAND_H))
+        y -= _OV_GAP
+
+    # RMS numeric readout to the right of the bar area
+    label = font.render(f"RMS: {rms:.4f}", True, (255, 255, 255))
+    surface.blit(label, (_OV_X0 + _OV_MAX_W + 8, _OV_BAR_Y + 2))
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +261,7 @@ def main() -> None:
     pygame.display.set_caption("Plasma Warp")
     window = pygame.display.set_mode((WIDTH, HEIGHT), pygame.DOUBLEBUF)
     clock  = pygame.time.Clock()
+    font   = pygame.font.SysFont(None, 20)
 
     t      = 0.0
     bass_s = mid_s = high_s = 0.0
@@ -235,8 +279,10 @@ def main() -> None:
                     running = False
 
             audio_chunk, _ = stream.read(CHUNK)
+            mono   = audio_chunk[:, 0]
+            rms    = float(np.sqrt(np.mean(mono ** 2)))
             bass_s, mid_s, high_s, bass_r, mid_r, high_r = _smooth_bands(
-                audio_chunk[:, 0], rate, bass_s, mid_s, high_s,
+                mono, rate, bass_s, mid_s, high_s,
             )
             frame += 1
             if debug and frame % 10 == 0:
@@ -249,6 +295,7 @@ def main() -> None:
             surf   = array_to_surface(plasma)
             scaled = pygame.transform.scale(surf, (WIDTH, HEIGHT))
             window.blit(scaled, (0, 0))
+            draw_overlay(window, rms, bass_s, mid_s, high_s, font)
             pygame.display.flip()
 
             t += dt
