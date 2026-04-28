@@ -4,13 +4,16 @@
 No video file required. Generates a flowing plasma background each frame
 and distorts it in real time using live audio FFT bands.
 
-Audio source: PulseAudio monitor (system audio). See commit 4 for
-  full monitor detection; this commit uses the default input device.
+Audio source: PulseAudio monitor (system audio — whatever is playing
+  through the speakers). Requires a monitor source to be visible to
+  PyAudio; exits with an error and instructions if none is found.
+  Override with AUDIO_INPUT_DEVICE env var (device index or name substring).
 """
 
 from __future__ import annotations
 
 import math
+import os
 import sys
 
 import numpy as np
@@ -68,31 +71,65 @@ def array_to_surface(arr: np.ndarray) -> pygame.Surface:
 
 
 # ---------------------------------------------------------------------------
-# Audio helpers (basic — monitor detection added in commit 4)
+# Audio — monitor detection (fail loud)
 # ---------------------------------------------------------------------------
 
-def open_audio_stream(pa: pyaudio.PyAudio) -> pyaudio.Stream | None:
-    try:
-        return pa.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=RATE,
-            input=True,
-            frames_per_buffer=CHUNK,
+def find_monitor_device(pa: pyaudio.PyAudio) -> int:
+    """
+    Return the PyAudio device index of a PulseAudio monitor source.
+
+    Resolution order:
+      1. AUDIO_INPUT_DEVICE env var — numeric index takes priority,
+         otherwise treated as a case-insensitive name substring.
+      2. First device whose name contains 'monitor' (case-insensitive).
+      3. Neither found → print instructions and sys.exit(1).
+    """
+    override = os.environ.get("AUDIO_INPUT_DEVICE")
+    if override is not None:
+        if override.isdigit():
+            idx = int(override)
+            name = pa.get_device_info_by_index(idx)["name"]
+            print(f"[audio] AUDIO_INPUT_DEVICE override: [{idx}] {name}")
+            return idx
+        for i in range(pa.get_device_count()):
+            info = pa.get_device_info_by_index(i)
+            if override.lower() in info["name"].lower() and info["maxInputChannels"] > 0:
+                print(f"[audio] AUDIO_INPUT_DEVICE override: [{i}] {info['name']}")
+                return i
+        print(
+            f"[audio] AUDIO_INPUT_DEVICE={override!r} matched no device — "
+            "falling through to monitor scan.",
+            file=sys.stderr,
         )
-    except OSError as exc:
-        print(f"[audio] Could not open stream: {exc}", file=sys.stderr)
-        return None
+
+    for i in range(pa.get_device_count()):
+        info = pa.get_device_info_by_index(i)
+        if "monitor" in info["name"].lower() and info["maxInputChannels"] > 0:
+            print(f"[audio] Monitor source: [{i}] {info['name']}")
+            return i
+
+    print(
+        "\n[audio] ERROR: No PulseAudio monitor source found.\n"
+        "  To capture system audio, run:\n"
+        "      pactl load-module module-loopback latency_msec=1\n"
+        "  Or open pavucontrol → Recording tab and set this app's source to\n"
+        "  'Monitor of <your output device>'.\n"
+        "  Then re-run this script.\n",
+        file=sys.stderr,
+    )
+    pa.terminate()
+    sys.exit(1)
 
 
-def drain_audio(stream: pyaudio.Stream | None) -> None:
-    """Read and discard one chunk to keep the buffer from backing up."""
-    if stream is None:
-        return
-    try:
-        stream.read(CHUNK, exception_on_overflow=False)
-    except OSError:
-        pass
+def open_audio_stream(pa: pyaudio.PyAudio, device_index: int) -> pyaudio.Stream:
+    return pa.open(
+        format=pyaudio.paInt16,
+        channels=1,
+        rate=RATE,
+        input=True,
+        input_device_index=device_index,
+        frames_per_buffer=CHUNK,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -100,13 +137,16 @@ def drain_audio(stream: pyaudio.Stream | None) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # Detect monitor source before opening a window — fail loud if absent.
+    pa           = pyaudio.PyAudio()
+    monitor_idx  = find_monitor_device(pa)   # exits 1 if no monitor found
+    # Stream opened in next commit when FFT warp is wired up.
+    pa.terminate()
+
     pygame.init()
     pygame.display.set_caption("Plasma Warp")
     window = pygame.display.set_mode((WIDTH, HEIGHT), pygame.DOUBLEBUF)
     clock  = pygame.time.Clock()
-
-    pa     = pyaudio.PyAudio()
-    stream = open_audio_stream(pa)
 
     t       = 0.0
     running = True
@@ -120,8 +160,6 @@ def main() -> None:
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 running = False
 
-        drain_audio(stream)
-
         plasma = generate_plasma(t)
         surf   = array_to_surface(plasma)
         scaled = pygame.transform.scale(surf, (WIDTH, HEIGHT))
@@ -130,10 +168,6 @@ def main() -> None:
 
         t += dt
 
-    if stream:
-        stream.stop_stream()
-        stream.close()
-    pa.terminate()
     pygame.quit()
 
 
