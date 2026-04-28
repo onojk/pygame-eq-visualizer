@@ -21,7 +21,7 @@ Notes
   In test mode we kill them after N seconds and still count that as a pass
   if they started successfully.
 - If a script requires an audio file, set the AUDIO_FILE environment variable
-  or place a default file at ./audio_file.mp3 (already in this repo).
+  or place a default file at ./assets/audio/audio_file.mp3 (already in this repo).
 - Logs are written to ./runlogs/<script>.log
 """
 from __future__ import annotations
@@ -45,6 +45,15 @@ WINDOW_DETECT_TIMEOUT = 5  # seconds to wait specifically for a window
 QUICK_EXIT_SECS = 2        # if a script exits this fast, assume "no open"
 REQUIRE_WINDOW_TO_PASS = True  # consider a visible window "proper launch" when possible
 
+
+def default_audio_file() -> str:
+    """Locate the bundled sample audio. Tries the new layout first, then the old one."""
+    for candidate in (REPO_ROOT / "assets" / "audio" / "audio_file.mp3",
+                      REPO_ROOT / "audio_file.mp3"):
+        if candidate.is_file():
+            return str(candidate)
+    return str(REPO_ROOT / "assets" / "audio" / "audio_file.mp3")
+
 # Heuristics for excluding files that are not meant to be launched
 EXCLUDE_GLOBS = [
     "main.py",
@@ -65,6 +74,12 @@ PREFERRED_INCLUDE = [
     "warpfield_visualizer.py",
     "coalescing_grid.py",
     "entropic_*.py",
+    # Numbered series after cleanup (00_safe_opener.py, 12_lightning.py, etc.)
+    "[0-9][0-9]_*.py",
+    "[0-9][0-9]b_*.py",
+    "aurora_*.py",
+    "warpfield_*.py",
+    "pygame_*.py",
 ]
 
 # ---------- Helpers ----------
@@ -96,25 +111,39 @@ def discover_scripts(include: List[str] | None = None,
     include = include or ["*.py"]
     exclude = (exclude or []) + EXCLUDE_GLOBS
 
+    # After the cleanup, visualizers live in visualizers/<category>/.
+    # Walk those subdirs as well as the repo root for backward compatibility.
+    SCAN_ROOTS = [REPO_ROOT, REPO_ROOT / "visualizers"]
+
     candidates: List[Path] = []
-    for p in REPO_ROOT.iterdir():
-        if not p.is_file():
+    seen = set()
+    for root in SCAN_ROOTS:
+        if not root.exists():
             continue
-        if p.suffix != ".py":
-            continue
-        name = p.name
-        if matches_any(name, exclude):
-            continue
-        if include and not matches_any(name, include):
-            # If not in include set, still allow later, but we collect separately
-            pass
-        candidates.append(p)
+        # Recurse into subdirs of visualizers/, but only iterdir() at REPO_ROOT
+        # (avoid pulling in archive/, tests/, tools/, etc. when scanning root)
+        iterator = root.rglob("*.py") if root != REPO_ROOT else root.iterdir()
+        for p in iterator:
+            if not p.is_file() or p.suffix != ".py":
+                continue
+            # Skip anything inside the archive — those are reference-only originals
+            if "archive" in p.parts:
+                continue
+            name = p.name
+            if matches_any(name, exclude):
+                continue
+            if include and not matches_any(name, include):
+                pass
+            if p.resolve() in seen:
+                continue
+            seen.add(p.resolve())
+            candidates.append(p)
 
     # Boost preferred names to the top (stable sort)
     def priority(path: Path) -> int:
         return 0 if matches_any(path.name, PREFERRED_INCLUDE) else 1
 
-    candidates.sort(key=lambda p: (priority(p), p.name.lower()))
+    candidates.sort(key=lambda p: (priority(p), str(p.relative_to(REPO_ROOT)).lower()))
     return candidates
 
 
@@ -304,7 +333,11 @@ def interactive_menu(scripts: List[Path], timeout: int) -> None:
     print(blue("\nDiscovered runnable scripts:"))
     for i, s in enumerate(scripts, 1):
         tag = "★" if matches_any(s.name, PREFERRED_INCLUDE) else " "
-        print(f"  {i:2d}. {s.name} {tag}")
+        try:
+            rel = s.relative_to(REPO_ROOT)
+        except ValueError:
+            rel = s
+        print(f"  {i:2d}. {rel} {tag}")
     print("\nOptions:")
     print("  [number]  Run that script now")
     print("  a         Test ALL (" + str(timeout) + "s each)")
@@ -322,7 +355,7 @@ def interactive_menu(scripts: List[Path], timeout: int) -> None:
                     print(red(f"[skip] {s.name} — syntax error"))
                     results.append({"script": s.name, "status": "syntax_error", "detail": str(err)[:160], "log": "-"})
                     continue
-                res = run_script(s, timeout=args.timeout, env_extra={"AUDIO_FILE": str(REPO_ROOT / "audio_file.mp3")})
+                res = run_script(s, timeout=args.timeout, env_extra={"AUDIO_FILE": default_audio_file()})
                 status = res["status"]
                 color_fn = green if status in ("ok", "alive_timeout") else red
                 print(color_fn(f"[{status}] {s.name}  log: {res['log']}"))
@@ -361,11 +394,18 @@ if __name__ == "__main__":
         sys.exit(0)
 
     if args.run:
-        target = next((p for p in scripts if p.name == args.run), None)
+        # Match by exact basename, or by relative path (e.g. visualizers/numbered/12_lightning.py)
+        target = next((p for p in scripts
+                       if p.name == args.run
+                       or str(p.relative_to(REPO_ROOT)) == args.run
+                       or str(p) == args.run), None)
         if not target:
             print(red(f"Script '{args.run}' not found among discovered candidates."))
             for s in scripts:
-                print(" -", s.name)
+                try:
+                    print(" -", s.relative_to(REPO_ROOT))
+                except ValueError:
+                    print(" -", s.name)
             sys.exit(2)
         ok, err = (True, None) if args.no_syntax_check else syntax_check(target)
         if not ok:
@@ -388,7 +428,7 @@ if __name__ == "__main__":
             if not ok:
                 results.append({"script": s.name, "status": "syntax_error", "detail": str(err)[:160], "log": "-"})
                 continue
-            res = run_script(s, timeout=args.timeout, env_extra={"AUDIO_FILE": str(REPO_ROOT / "audio_file.mp3")})
+            res = run_script(s, timeout=args.timeout, env_extra={"AUDIO_FILE": default_audio_file()})
             results.append(res)
         print_table(results)
         # Success criteria: prefer window_ok_*; else accept headless_ok; else fail
