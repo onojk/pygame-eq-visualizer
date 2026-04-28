@@ -75,12 +75,15 @@ def array_to_surface(arr: np.ndarray) -> pygame.Surface:
 # ---------------------------------------------------------------------------
 
 def _iter_devices(pa: pyaudio.PyAudio):
-    """Yield (index, info) for every device PyAudio can describe, skipping gaps."""
-    for i in range(pa.get_device_count()):
+    """Yield (global_index, info) for every device in host API 0, skipping gaps."""
+    api_info = pa.get_host_api_info_by_index(0)
+    num_devices = api_info.get('deviceCount', 0)
+    for i in range(num_devices):
         try:
-            yield i, pa.get_device_info_by_index(i)
+            info = pa.get_device_info_by_host_api_device_index(0, i)
+            yield int(info['index']), info
         except OSError:
-            continue  # PipeWire leaves holes in the index space
+            continue
 
 
 def find_monitor_device(pa: pyaudio.PyAudio) -> int:
