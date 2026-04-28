@@ -183,8 +183,8 @@ def _smooth_bands(
     bass_s: float,
     mid_s: float,
     high_s: float,
-) -> tuple[float, float, float]:
-    """FFT the mono float32 chunk; return exponentially smoothed bass/mid/high."""
+) -> tuple[float, float, float, float, float, float]:
+    """FFT the mono float32 chunk; return (smoothed×3, raw×3) band energies."""
     N        = len(chunk)
     spectrum = np.abs(fft(chunk)[:N // 2]) * (2.0 / N)
     freqs    = np.arange(N // 2) * (rate / N)
@@ -198,6 +198,7 @@ def _smooth_bands(
         bass_s + _ALPHA * (bass_raw - bass_s),
         mid_s  + _ALPHA * (mid_raw  - mid_s),
         high_s + _ALPHA * (high_raw - high_s),
+        bass_raw, mid_raw, high_raw,
     )
 
 
@@ -206,6 +207,8 @@ def _smooth_bands(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    debug = os.environ.get('DEBUG_AUDIO', '') == '1'
+
     monitor_idx, dev_info = find_monitor_device()   # exits 1 if no monitor found
     rate                  = _device_rate(dev_info)
     print(f"[audio] Using device [{monitor_idx}] '{dev_info['name']}' at {rate} Hz")
@@ -218,6 +221,7 @@ def main() -> None:
 
     t      = 0.0
     bass_s = mid_s = high_s = 0.0
+    frame  = 0
     running = True
 
     try:
@@ -231,9 +235,15 @@ def main() -> None:
                     running = False
 
             audio_chunk, _ = stream.read(CHUNK)
-            bass_s, mid_s, high_s = _smooth_bands(
+            bass_s, mid_s, high_s, bass_r, mid_r, high_r = _smooth_bands(
                 audio_chunk[:, 0], rate, bass_s, mid_s, high_s,
             )
+            frame += 1
+            if debug and frame % 10 == 0:
+                print(
+                    f"[audio] raw: B={bass_r:.4f} M={mid_r:.4f} H={high_r:.4f}"
+                    f"  smooth: B={bass_s:.4f} M={mid_s:.4f} H={high_s:.4f}"
+                )
 
             plasma = generate_plasma(t, bass_s, mid_s, high_s)
             surf   = array_to_surface(plasma)
