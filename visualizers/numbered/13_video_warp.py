@@ -13,12 +13,14 @@ Audio source: PipeWire monitor captured via pw-record subprocess.
 
 from __future__ import annotations
 
+import fcntl
 import math
 import os
 import shutil
 import subprocess
 import sys
 import threading
+import time
 
 import numpy as np
 import pygame
@@ -138,10 +140,12 @@ def draw_overlay(
 
 # ---------------------------------------------------------------------------
 # Shared audio state — written by the reader thread, read by the render loop.
-# _latest_chunk always holds the most recent CHUNK mono float32 samples.
+# _latest_raw is an immutable bytes object (CHUNK * 4 bytes of float32 PCM).
+# Replacing the reference under the lock is O(1); the render loop converts
+# to numpy outside the lock so the lock is held for the minimum possible time.
 # ---------------------------------------------------------------------------
-_audio_lock   = threading.Lock()
-_latest_chunk = np.zeros(CHUNK, dtype='float32')
+_audio_lock = threading.Lock()
+_latest_raw = bytes(CHUNK * 4)  # zeroed silence until first chunk arrives
 
 
 # ---------------------------------------------------------------------------
@@ -234,15 +238,25 @@ def start_pw_record(monitor_name: str) -> subprocess.Popen:
     print(f"[audio] pw-record PID: {proc.pid}")
 
     def _reader():
-        global _latest_chunk
-        read_bytes = CHUNK * 4  # float32 = 4 bytes per sample
+        global _latest_raw
+        frame_bytes = CHUNK * 4
+        fd = proc.stdout.fileno()
+        # Non-blocking so os.read never stalls; BlockingIOError means pipe is empty.
+        fcntl.fcntl(fd, fcntl.F_SETFL,
+                    fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_NONBLOCK)
+        buf = bytearray()
         while True:
-            raw = proc.stdout.read(read_bytes)
-            if not raw or len(raw) < read_bytes:
-                break
-            chunk = np.frombuffer(raw, dtype=np.float32)
-            with _audio_lock:
-                _latest_chunk = chunk.copy()
+            try:
+                data = os.read(fd, 65536)
+                if not data:
+                    break                          # pw-record exited
+                buf.extend(data)
+                while len(buf) >= frame_bytes:
+                    with _audio_lock:
+                        _latest_raw = bytes(buf[:frame_bytes])
+                    del buf[:frame_bytes]
+            except BlockingIOError:
+                time.sleep(0.001)                 # pipe empty; yield briefly
 
     def _stderr_logger():
         for line in proc.stderr:
@@ -310,10 +324,11 @@ def main() -> None:
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     running = False
 
-            # Grab the latest chunk deposited by the callback thread.
-            # If the callback hasn't fired yet, _latest_chunk is all zeros — fine.
+            # Grab the latest raw bytes from the reader thread (O(1) under lock),
+            # then convert to float32 numpy outside the lock.
             with _audio_lock:
-                mono = _latest_chunk.copy()
+                raw = _latest_raw
+            mono = np.frombuffer(raw, dtype=np.float32).copy()
 
             rms    = float(np.sqrt(np.mean(mono ** 2)))
             bass_s, mid_s, high_s, bass_r, mid_r, high_r = _smooth_bands(
