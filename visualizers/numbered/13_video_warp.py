@@ -6,7 +6,7 @@ and distorts it in real time using live audio FFT bands.
 
 Audio source: PulseAudio monitor (system audio — whatever is playing
   through the speakers). Requires a monitor source to be visible to
-  PyAudio; exits with an error and instructions if none is found.
+  sounddevice; exits with an error and instructions if none is found.
   Override with AUDIO_INPUT_DEVICE env var (device index or name substring).
 """
 
@@ -17,8 +17,8 @@ import os
 import sys
 
 import numpy as np
-import pyaudio
 import pygame
+import sounddevice as sd
 from scipy.fftpack import fft
 
 # ---------------------------------------------------------------------------
@@ -74,30 +74,18 @@ def array_to_surface(arr: np.ndarray) -> pygame.Surface:
 # Audio — monitor detection (fail loud)
 # ---------------------------------------------------------------------------
 
-def _iter_devices(pa: pyaudio.PyAudio):
-    """Yield (global_index, info) for every device in host API 0, skipping gaps."""
-    api_info = pa.get_host_api_info_by_index(0)
-    num_devices = api_info.get('deviceCount', 0)
-    for i in range(num_devices):
-        try:
-            info = pa.get_device_info_by_host_api_device_index(0, i)
-            yield int(info['index']), info
-        except OSError:
-            continue
-
-
 def _device_rate(info: dict) -> int:
     """Extract native sample rate from device info; fall back to RATE_FALLBACK."""
     try:
-        r = int(info['defaultSampleRate'])
+        r = int(info['default_samplerate'])
         return r if r > 0 else RATE_FALLBACK
     except (KeyError, ValueError, TypeError):
         return RATE_FALLBACK
 
 
-def find_monitor_device(pa: pyaudio.PyAudio) -> tuple[int, dict]:
+def find_monitor_device() -> tuple[int, dict]:
     """
-    Return device index for system-audio capture.
+    Return (device_index, device_info) for system-audio capture.
 
     Resolution order:
       1. AUDIO_INPUT_DEVICE env var — checked first, skips scanning entirely.
@@ -107,52 +95,48 @@ def find_monitor_device(pa: pyaudio.PyAudio) -> tuple[int, dict]:
          'pulse' is the PipeWire→PulseAudio bridge; routing is done via
          pavucontrol's Recording tab after the stream is open.
       3. Nothing found → print instructions and sys.exit(1).
-
-    Returns (global_device_index, device_info_dict).
     """
     override = os.environ.get("AUDIO_INPUT_DEVICE")
 
-    # --- env var path (skip scanning) ---
+    # --- env var path ---
     if override is not None:
         if override.isdigit():
             idx = int(override)
             try:
-                info = pa.get_device_info_by_index(idx)
+                info = dict(sd.query_devices(idx))
                 print(f"[audio] AUDIO_INPUT_DEVICE={override}: [{idx}] {info['name']}")
                 return idx, info
-            except OSError:
+            except (ValueError, sd.PortAudioError):
                 print(
                     f"[audio] ERROR: AUDIO_INPUT_DEVICE={override} is not a "
                     "valid device index on this system.",
                     file=sys.stderr,
                 )
-                pa.terminate()
                 sys.exit(1)
 
         # substring match
-        for i, info in _iter_devices(pa):
-            if override.lower() in info["name"].lower() and info["maxInputChannels"] > 0:
+        for i, info in enumerate(sd.query_devices()):
+            if override.lower() in info['name'].lower() and info['max_input_channels'] > 0:
                 print(f"[audio] AUDIO_INPUT_DEVICE={override!r}: [{i}] {info['name']}")
-                return i, info
+                return i, dict(info)
         print(
             f"[audio] ERROR: AUDIO_INPUT_DEVICE={override!r} matched no device.\n"
             f"  Run with no AUDIO_INPUT_DEVICE set to see available devices.",
             file=sys.stderr,
         )
-        pa.terminate()
         sys.exit(1)
 
     # --- auto-scan path ---
-    for i, info in _iter_devices(pa):
-        name = info["name"].lower()
-        if info["maxInputChannels"] > 0 and ("monitor" in name or "pulse" in name):
+    for i, info in enumerate(sd.query_devices()):
+        name = info['name'].lower()
+        if info['max_input_channels'] > 0 and ('monitor' in name or 'pulse' in name):
             print(f"[audio] System-audio source: [{i}] {info['name']}")
-            return i, info
+            return i, dict(info)
 
     # Print available devices to help the user pick one manually
     print("\n[audio] Available input devices:", file=sys.stderr)
-    for i, info in _iter_devices(pa):
-        if info["maxInputChannels"] > 0:
+    for i, info in enumerate(sd.query_devices()):
+        if info['max_input_channels'] > 0:
             print(f"  [{i}] {info['name']}", file=sys.stderr)
 
     print(
@@ -165,19 +149,19 @@ def find_monitor_device(pa: pyaudio.PyAudio) -> tuple[int, dict]:
         "  Or set AUDIO_INPUT_DEVICE=<index> using one of the indices listed above.\n",
         file=sys.stderr,
     )
-    pa.terminate()
     sys.exit(1)
 
 
-def open_audio_stream(pa: pyaudio.PyAudio, device_index: int, rate: int) -> pyaudio.Stream:
-    return pa.open(
-        format=pyaudio.paInt16,
+def open_audio_stream(device_index: int, rate: int) -> sd.InputStream:
+    stream = sd.InputStream(
+        device=device_index,
+        samplerate=rate,
         channels=1,
-        rate=rate,
-        input=True,
-        input_device_index=device_index,
-        frames_per_buffer=CHUNK,
+        blocksize=CHUNK,
+        dtype='float32',
     )
+    stream.start()
+    return stream
 
 
 # ---------------------------------------------------------------------------
@@ -186,12 +170,10 @@ def open_audio_stream(pa: pyaudio.PyAudio, device_index: int, rate: int) -> pyau
 
 def main() -> None:
     # Detect monitor source before opening a window — fail loud if absent.
-    pa                      = pyaudio.PyAudio()
-    monitor_idx, dev_info   = find_monitor_device(pa)   # exits 1 if no monitor found
-    rate                    = _device_rate(dev_info)
-    print(f"[audio] Using rate {rate} Hz from device '{dev_info['name']}'")
+    monitor_idx, dev_info = find_monitor_device()   # exits 1 if no monitor found
+    rate                  = _device_rate(dev_info)
+    print(f"[audio] Using device [{monitor_idx}] '{dev_info['name']}' at {rate} Hz")
     # Stream opened in next commit when FFT warp is wired up.
-    pa.terminate()
 
     pygame.init()
     pygame.display.set_caption("Plasma Warp")

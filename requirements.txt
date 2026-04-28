@@ -2,4 +2,5 @@ numpy
 pygame
 pyaudio
 scipy
+sounddevice
 
