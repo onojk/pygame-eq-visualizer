@@ -74,47 +74,81 @@ def array_to_surface(arr: np.ndarray) -> pygame.Surface:
 # Audio — monitor detection (fail loud)
 # ---------------------------------------------------------------------------
 
+def _iter_devices(pa: pyaudio.PyAudio):
+    """Yield (index, info) for every device PyAudio can describe, skipping gaps."""
+    for i in range(pa.get_device_count()):
+        try:
+            yield i, pa.get_device_info_by_index(i)
+        except OSError:
+            continue  # PipeWire leaves holes in the index space
+
+
 def find_monitor_device(pa: pyaudio.PyAudio) -> int:
     """
-    Return the PyAudio device index of a PulseAudio monitor source.
+    Return device index for system-audio capture.
 
     Resolution order:
-      1. AUDIO_INPUT_DEVICE env var — numeric index takes priority,
-         otherwise treated as a case-insensitive name substring.
-      2. First device whose name contains 'monitor' (case-insensitive).
-      3. Neither found → print instructions and sys.exit(1).
+      1. AUDIO_INPUT_DEVICE env var — checked first, skips scanning entirely.
+         - Digit string  → validate that index, fail loud if invalid.
+         - Other string  → case-insensitive substring match across all devices.
+      2. Scan all devices for a name containing 'monitor' or 'pulse'.
+         'pulse' is the PipeWire→PulseAudio bridge; routing is done via
+         pavucontrol's Recording tab after the stream is open.
+      3. Nothing found → print instructions and sys.exit(1).
     """
     override = os.environ.get("AUDIO_INPUT_DEVICE")
+
+    # --- env var path (skip scanning) ---
     if override is not None:
         if override.isdigit():
             idx = int(override)
-            name = pa.get_device_info_by_index(idx)["name"]
-            print(f"[audio] AUDIO_INPUT_DEVICE override: [{idx}] {name}")
-            return idx
-        for i in range(pa.get_device_count()):
-            info = pa.get_device_info_by_index(i)
+            try:
+                name = pa.get_device_info_by_index(idx)["name"]
+                print(f"[audio] AUDIO_INPUT_DEVICE={override}: [{idx}] {name}")
+                return idx
+            except OSError:
+                print(
+                    f"[audio] ERROR: AUDIO_INPUT_DEVICE={override} is not a "
+                    "valid device index on this system.",
+                    file=sys.stderr,
+                )
+                pa.terminate()
+                sys.exit(1)
+
+        # substring match
+        for i, info in _iter_devices(pa):
             if override.lower() in info["name"].lower() and info["maxInputChannels"] > 0:
-                print(f"[audio] AUDIO_INPUT_DEVICE override: [{i}] {info['name']}")
+                print(f"[audio] AUDIO_INPUT_DEVICE={override!r}: [{i}] {info['name']}")
                 return i
         print(
-            f"[audio] AUDIO_INPUT_DEVICE={override!r} matched no device — "
-            "falling through to monitor scan.",
+            f"[audio] ERROR: AUDIO_INPUT_DEVICE={override!r} matched no device.\n"
+            f"  Run with no AUDIO_INPUT_DEVICE set to see available devices.",
             file=sys.stderr,
         )
+        pa.terminate()
+        sys.exit(1)
 
-    for i in range(pa.get_device_count()):
-        info = pa.get_device_info_by_index(i)
-        if "monitor" in info["name"].lower() and info["maxInputChannels"] > 0:
-            print(f"[audio] Monitor source: [{i}] {info['name']}")
+    # --- auto-scan path ---
+    for i, info in _iter_devices(pa):
+        name = info["name"].lower()
+        if info["maxInputChannels"] > 0 and ("monitor" in name or "pulse" in name):
+            print(f"[audio] System-audio source: [{i}] {info['name']}")
             return i
 
+    # Print available devices to help the user pick one manually
+    print("\n[audio] Available input devices:", file=sys.stderr)
+    for i, info in _iter_devices(pa):
+        if info["maxInputChannels"] > 0:
+            print(f"  [{i}] {info['name']}", file=sys.stderr)
+
     print(
-        "\n[audio] ERROR: No PulseAudio monitor source found.\n"
-        "  To capture system audio, run:\n"
+        "\n[audio] ERROR: No monitor or pulse source found.\n"
+        "  To capture system audio:\n"
         "      pactl load-module module-loopback latency_msec=1\n"
-        "  Or open pavucontrol → Recording tab and set this app's source to\n"
+        "  Or open pavucontrol → Recording tab and route this app's input to\n"
         "  'Monitor of <your output device>'.\n"
-        "  Then re-run this script.\n",
+        "  On PipeWire, try: AUDIO_INPUT_DEVICE=pulse python3 main.py --run 13_video_warp.py\n"
+        "  Or set AUDIO_INPUT_DEVICE=<index> using one of the indices listed above.\n",
         file=sys.stderr,
     )
     pa.terminate()
