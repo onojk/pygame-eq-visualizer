@@ -174,8 +174,11 @@ def _log(logfile, msg: str) -> None:
     line = f"[{_ts()}] {msg}"
     print(line, flush=True)
     if logfile is not None:
-        logfile.write(line + "\n")
-        logfile.flush()
+        try:
+            logfile.write(line + "\n")
+            logfile.flush()
+        except (ValueError, OSError):
+            pass  # logfile closed during shutdown; discard silently
 
 
 def _dump_diagnostics(logfile, proc: subprocess.Popen) -> None:
@@ -267,8 +270,7 @@ def _watchdog_loop(
 
             restart_count += 1
             _log(logfile,
-                 f"STALL detected after 2s, restarting pw-record"
-                 f" (restart count: {restart_count})")
+                 f"STALL detected, recovering... (restart count: {restart_count})")
 
             old_proc = proc_box[0]
             old_proc.terminate()
@@ -278,10 +280,19 @@ def _watchdog_loop(
                 old_proc.kill()
                 old_proc.wait()
 
+            _log(logfile, "  suspending monitor source")
+            subprocess.run(['pactl', 'suspend-source', monitor_name, '1'],
+                           check=False, timeout=2)
+            time.sleep(0.1)
+            _log(logfile, "  resuming monitor source")
+            subprocess.run(['pactl', 'suspend-source', monitor_name, '0'],
+                           check=False, timeout=2)
+
+            _log(logfile, "  spawning fresh pw-record")
             new_proc, new_reader = start_pw_record(monitor_name)
             proc_box[0]          = new_proc
             reader_box[0]        = new_reader
-            _log(logfile, f"new pw-record PID: {new_proc.pid}")
+            _log(logfile, f"  new PID: {new_proc.pid}")
 
             stall_ticks        = 0
             # Reset watchdog so the post-restart silence doesn't re-trigger it.
