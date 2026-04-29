@@ -408,11 +408,14 @@ def start_pw_record(monitor_name: str) -> tuple[subprocess.Popen, threading.Thre
     proc = subprocess.Popen(
         [
             'pw-record',
+            '--raw',
             f'--target={monitor_name}',
             '--format=f32',
             '--rate=44100',
             '--channels=1',
-            '--raw',
+            '--media-category=Capture',
+            '--media-role=Production',
+            '--latency=20ms',
             '-',
         ],
         stdout=subprocess.PIPE,
