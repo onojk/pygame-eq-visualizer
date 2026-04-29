@@ -216,29 +216,24 @@ def _watchdog_loop(
     """
     Runs forever as a daemon thread. Two jobs:
 
-    1. Stall detector + two-tier recovery (always active):
-       Fast path (SIGKILL + immediate respawn, ~14 ms) is tried first.
-       If chunks_total still doesn't grow within 3 s, escalates to the
-       slow path (pactl suspend/resume + respawn, ~1.8 s) which resets
-       the PipeWire monitor source itself.
-       Gives up and sets _quit_event after MAX_RESTARTS total attempts.
+    1. Stall detector (always active): if chunks_total stops growing for 2 s
+       while audio was previously flowing, reset the PipeWire monitor source
+       via pactl suspend/resume and spawn a fresh pw-record.
+       Gives up and sets _quit_event after MAX_RESTARTS attempts.
 
     2. Frozen-RMS watchdog (always active, dumps to logfile/stdout): if RMS
        value is unchanged for 3 consecutive seconds after we first had audio,
        dump a diagnostic snapshot. Fires at most once per stall episode.
     """
-    last_chunks          = 0
-    stall_ticks          = 0     # consecutive 1 s ticks with no new chunks
-    had_audio            = False
-    restart_count        = 0
+    last_chunks        = 0
+    stall_ticks        = 0   # consecutive 1 s ticks with no new chunks
+    had_audio          = False
+    restart_count      = 0
 
-    fast_recovery_chunks = None  # chunks value when fast recovery was launched
-    fast_recovery_ticks  = 0     # ticks elapsed since fast recovery
-
-    prev_rms_wd          = None
-    wd_unchanged_ticks   = 0
-    had_nonzero_rms      = False
-    freeze_dumped        = False
+    prev_rms_wd        = None
+    wd_unchanged_ticks = 0
+    had_nonzero_rms    = False
+    freeze_dumped      = False
 
     while True:
         time.sleep(1.0)
@@ -261,107 +256,66 @@ def _watchdog_loop(
 
         # ---- stall detector ------------------------------------------------
         if chunks > last_chunks:
-            had_audio            = True
-            stall_ticks          = 0
-            fast_recovery_chunks = None  # fast recovery succeeded if it was pending
-            fast_recovery_ticks  = 0
+            had_audio   = True
+            stall_ticks = 0
         elif had_audio:
             stall_ticks += 1
         last_chunks = chunks
 
-        # ---- fast-recovery follow-up: did kill+respawn restore flow? -------
-        if fast_recovery_chunks is not None:
-            fast_recovery_ticks += 1
-            if fast_recovery_ticks >= 3:
-                # Chunks still not growing 3 s after fast recovery — escalate.
-                fast_recovery_chunks = None
-                fast_recovery_ticks  = 0
-                if restart_count >= MAX_RESTARTS:
-                    _log(logfile,
-                         f"STALL: max restarts ({MAX_RESTARTS}) reached, giving up.")
-                    _quit_event.set()
-                    return
-                restart_count += 1
-                _log(logfile,
-                     f"fast-recovery failed, escalating to source reset"
-                     f" (restart count: {restart_count})")
-
-                old_proc = proc_box[0]
-                old_proc.terminate()  # non-blocking; pactl runs in parallel
-
-                _log(logfile, "  suspending monitor source")
-                suspend = None
-                try:
-                    suspend = subprocess.run(
-                        ['pactl', 'suspend-source', monitor_name, '1'],
-                        check=False,
-                    )
-                except subprocess.TimeoutExpired:
-                    _log(logfile, "  suspend timed out; skipping resume")
-
-                try:
-                    old_proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    old_proc.kill()
-                    old_proc.wait()
-
-                if suspend is None or suspend.returncode != 0:
-                    _log(logfile, "  suspend failed (skipping resume)")
-                else:
-                    time.sleep(0.1)
-                    _log(logfile, "  resuming monitor source")
-                    try:
-                        subprocess.run(
-                            ['pactl', 'suspend-source', monitor_name, '0'],
-                            check=False,
-                        )
-                    except subprocess.TimeoutExpired:
-                        _log(logfile, "  resume timed out; continuing anyway")
-
-                _log(logfile, "  spawning fresh pw-record")
-                new_proc, new_reader = start_pw_record(monitor_name)
-                proc_box[0]          = new_proc
-                reader_box[0]        = new_reader
-                _log(logfile, f"  new PID: {new_proc.pid}")
-
-                stall_ticks        = 0
-                prev_rms_wd        = None
-                wd_unchanged_ticks = 0
-                freeze_dumped      = False
-
-        # ---- initial stall → fast recovery (SIGKILL + immediate respawn) ---
-        elif stall_ticks >= 2:
+        if stall_ticks >= 2:
             if restart_count >= MAX_RESTARTS:
                 _log(logfile,
                      f"STALL: max restarts ({MAX_RESTARTS}) reached, giving up.")
                 _quit_event.set()
                 return
+
             restart_count += 1
             _log(logfile,
-                 f"STALL detected, fast-recovery (kill+respawn)"
-                 f" (restart count: {restart_count})")
+                 f"STALL detected, recovering... (restart count: {restart_count})")
 
             old_proc = proc_box[0]
+            old_proc.terminate()  # non-blocking; runs in parallel with pactl below
+
+            _log(logfile, "  suspending monitor source")
+            suspend = None
             try:
-                old_proc.kill()
-                old_proc.wait(timeout=0.5)
+                suspend = subprocess.run(
+                    ['pactl', 'suspend-source', monitor_name, '1'],
+                    check=False,
+                )
             except subprocess.TimeoutExpired:
-                pass  # zombie; will be reaped eventually
-            except Exception as exc:
-                _log(logfile, f"  kill failed: {exc}")
+                _log(logfile, "  suspend timed out; skipping resume")
+
+            # old_proc is dead by now (pactl took ~1.8 s); cap wait defensively
+            try:
+                old_proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                old_proc.kill()
+                old_proc.wait()
+
+            if suspend is None or suspend.returncode != 0:
+                _log(logfile, "  suspend failed (skipping resume)")
+            else:
+                time.sleep(0.1)
+                _log(logfile, "  resuming monitor source")
+                try:
+                    subprocess.run(
+                        ['pactl', 'suspend-source', monitor_name, '0'],
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    _log(logfile, "  resume timed out; continuing anyway")
 
             _log(logfile, "  spawning fresh pw-record")
             new_proc, new_reader = start_pw_record(monitor_name)
-            proc_box[0]   = new_proc
-            reader_box[0] = new_reader
+            proc_box[0]          = new_proc
+            reader_box[0]        = new_reader
             _log(logfile, f"  new PID: {new_proc.pid}")
 
-            fast_recovery_chunks = chunks  # baseline; if no growth in 3 ticks → escalate
-            fast_recovery_ticks  = 0
-            stall_ticks          = 0
-            prev_rms_wd          = None
-            wd_unchanged_ticks   = 0
-            freeze_dumped        = False
+            stall_ticks        = 0
+            prev_rms_wd        = None
+            wd_unchanged_ticks = 0
+            freeze_dumped      = False
 
         # ---- frozen-RMS watchdog -------------------------------------------
         if rms != prev_rms_wd:
