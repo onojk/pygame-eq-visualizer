@@ -411,11 +411,10 @@ def start_pw_record(monitor_name: str) -> tuple[subprocess.Popen, threading.Thre
             '--raw',
             f'--target={monitor_name}',
             '--format=f32',
-            '--rate=44100',
+            '--rate=48000',
             '--channels=1',
             '--media-category=Capture',
             '--media-role=Production',
-            '--latency=20ms',
             '-',
         ],
         stdout=subprocess.PIPE,
@@ -494,7 +493,7 @@ def main() -> None:
 
     monitor_name        = find_monitor_source()        # exits 1 if no monitor found
     proc, reader_thread = start_pw_record(monitor_name)
-    rate                = 44100                        # matches --rate flag passed to pw-record
+    rate                = 48000                        # matches --rate flag passed to pw-record
 
     # Mutable boxes so the watchdog thread can hot-swap proc/reader on restart.
     proc_box   = [proc]
