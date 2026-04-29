@@ -276,26 +276,34 @@ def _watchdog_loop(
             old_proc.terminate()  # non-blocking; runs in parallel with pactl below
 
             _log(logfile, "  suspending monitor source")
-            suspend = subprocess.run(
-                ['pactl', 'suspend-source', monitor_name, '1'],
-                check=False, timeout=1.0,
-            )
-            # old_proc likely already dead after the pactl call; cap wait at 1 s
+            suspend = None
+            try:
+                suspend = subprocess.run(
+                    ['pactl', 'suspend-source', monitor_name, '1'],
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                _log(logfile, "  suspend timed out; skipping resume")
+
+            # old_proc is dead by now (pactl took ~1.8 s); cap wait defensively
             try:
                 old_proc.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 old_proc.kill()
                 old_proc.wait()
 
-            if suspend.returncode != 0:
+            if suspend is None or suspend.returncode != 0:
                 _log(logfile, "  suspend failed (skipping resume)")
             else:
-                time.sleep(0.05)
+                time.sleep(0.1)
                 _log(logfile, "  resuming monitor source")
-                subprocess.run(
-                    ['pactl', 'suspend-source', monitor_name, '0'],
-                    check=False, timeout=1.0,
-                )
+                try:
+                    subprocess.run(
+                        ['pactl', 'suspend-source', monitor_name, '0'],
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    _log(logfile, "  resume timed out; continuing anyway")
 
             _log(logfile, "  spawning fresh pw-record")
             new_proc, new_reader = start_pw_record(monitor_name)
