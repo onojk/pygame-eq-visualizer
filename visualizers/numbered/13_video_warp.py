@@ -9,6 +9,11 @@ Audio source: PipeWire monitor captured via pw-record subprocess.
   as a child process and reads raw float32 PCM from its stdout on a daemon
   thread. No PortAudio / sounddevice in the hot path — zero playback interference.
   Override target with AUDIO_INPUT_DEVICE env var (passed directly to pw-record --target).
+
+Recovery: a background watchdog restarts pw-record automatically if the
+  PipeWire monitor source stalls (chunks stop arriving for 2 s). Up to 50
+  restarts are attempted before giving up. Set DEBUG_FREEZE=1 for verbose
+  heartbeat + diagnostic dump logging to ./runlogs/.
 """
 
 from __future__ import annotations
@@ -42,6 +47,8 @@ HIGH_SCALE = 12.0
 
 WIDTH,  HEIGHT  = 1280, 720   # display resolution
 PLAS_W, PLAS_H  = 640,  360   # internal plasma resolution (scaled up 2×)
+
+MAX_RESTARTS = 50  # abort after this many consecutive pw-record restarts
 
 TAU = math.tau  # 2π
 
@@ -149,9 +156,12 @@ _latest_raw   = bytes(CHUNK * 4)  # zeroed silence until first chunk arrives
 _chunks_total = 0                  # incremented by reader thread on each chunk
 _latest_rms   = 0.0               # updated by main loop each frame
 
+# Set by the watchdog when MAX_RESTARTS is exceeded; main loop checks this.
+_quit_event = threading.Event()
+
 
 # ---------------------------------------------------------------------------
-# Debug-freeze instrumentation  (active only when DEBUG_FREEZE=1)
+# Debug / watchdog instrumentation
 # ---------------------------------------------------------------------------
 
 def _ts() -> str:
@@ -160,10 +170,12 @@ def _ts() -> str:
 
 
 def _log(logfile, msg: str) -> None:
+    """Print with timestamp; also write to logfile when it is not None."""
     line = f"[{_ts()}] {msg}"
     print(line, flush=True)
-    logfile.write(line + "\n")
-    logfile.flush()
+    if logfile is not None:
+        logfile.write(line + "\n")
+        logfile.flush()
 
 
 def _dump_diagnostics(logfile, proc: subprocess.Popen) -> None:
@@ -192,35 +204,105 @@ def _dump_diagnostics(logfile, proc: subprocess.Popen) -> None:
     _log(logfile, f"--- {proc_status} (head 10) ---\n{out}")
 
 
-def _heartbeat_loop(logfile, proc: subprocess.Popen, reader_thread: threading.Thread) -> None:
-    consecutive_silent = 0
-    had_nonzero        = False
+def _watchdog_loop(
+    logfile,
+    proc_box: list,
+    reader_box: list,
+    monitor_name: str,
+) -> None:
+    """
+    Runs forever as a daemon thread. Two jobs:
+
+    1. Stall detector (always active): if chunks_total stops growing for 2 s
+       while audio was previously flowing, kill and restart pw-record.
+       Gives up and sets _quit_event after MAX_RESTARTS attempts.
+
+    2. Frozen-RMS watchdog (always active, dumps to logfile/stdout): if RMS
+       value is unchanged for 3 consecutive seconds after we first had audio,
+       dump a diagnostic snapshot. Fires at most once per stall episode.
+    """
+    last_chunks        = 0
+    stall_ticks        = 0   # consecutive 1 s ticks with no new chunks
+    had_audio          = False
+    restart_count      = 0
+
+    prev_rms_wd        = None
+    wd_unchanged_ticks = 0
+    had_nonzero_rms    = False
     freeze_dumped      = False
 
     while True:
         time.sleep(1.0)
+
         with _audio_lock:
             rms    = _latest_rms
             chunks = _chunks_total
 
-        reader_alive = reader_thread.is_alive()
-        pw_alive     = proc.poll() is None
+        proc          = proc_box[0]
+        reader_thread = reader_box[0]
+        reader_alive  = reader_thread.is_alive()
+        pw_alive      = proc.poll() is None
 
-        _log(logfile,
-             f"heartbeat: rms={rms:.4f} chunks_total={chunks}"
-             f" reader_alive={reader_alive} pw_alive={pw_alive}")
+        # Heartbeat line — written to file only (avoids stdout noise in normal use).
+        if logfile is not None:
+            _log(logfile,
+                 f"heartbeat: rms={rms:.4f} chunks_total={chunks}"
+                 f" reader_alive={reader_alive} pw_alive={pw_alive}"
+                 f" restarts={restart_count}")
 
-        if rms > 0.0:
-            had_nonzero        = True
-            consecutive_silent = 0
+        # ---- stall detector ------------------------------------------------
+        if chunks > last_chunks:
+            had_audio   = True
+            stall_ticks = 0
+        elif had_audio:
+            stall_ticks += 1
+        last_chunks = chunks
+
+        if stall_ticks >= 2:
+            if restart_count >= MAX_RESTARTS:
+                _log(logfile,
+                     f"STALL: max restarts ({MAX_RESTARTS}) reached, giving up.")
+                _quit_event.set()
+                return
+
+            restart_count += 1
+            _log(logfile,
+                 f"STALL detected after 2s, restarting pw-record"
+                 f" (restart count: {restart_count})")
+
+            old_proc = proc_box[0]
+            old_proc.terminate()
+            try:
+                old_proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                old_proc.kill()
+                old_proc.wait()
+
+            new_proc, new_reader = start_pw_record(monitor_name)
+            proc_box[0]          = new_proc
+            reader_box[0]        = new_reader
+            _log(logfile, f"new pw-record PID: {new_proc.pid}")
+
+            stall_ticks        = 0
+            # Reset watchdog so the post-restart silence doesn't re-trigger it.
+            prev_rms_wd        = None
+            wd_unchanged_ticks = 0
             freeze_dumped      = False
-        elif had_nonzero:
-            consecutive_silent += 1
 
-        if consecutive_silent >= 3 and not freeze_dumped:
+        # ---- frozen-RMS watchdog -------------------------------------------
+        if rms != prev_rms_wd:
+            if rms > 0.0:
+                had_nonzero_rms = True
+            prev_rms_wd        = rms
+            wd_unchanged_ticks = 0
+            freeze_dumped      = False
+        elif had_nonzero_rms:
+            wd_unchanged_ticks += 1
+
+        if wd_unchanged_ticks >= 3 and not freeze_dumped:
             freeze_dumped = True
-            _log(logfile, "WATCHDOG: audio went silent. Dumping diagnostic state...")
-            _dump_diagnostics(logfile, proc)
+            _log(logfile, "WATCHDOG: RMS frozen for 3s. Dumping diagnostic state...")
+            _dump_diagnostics(logfile, proc_box[0])
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +367,7 @@ def start_pw_record(monitor_name: str) -> tuple[subprocess.Popen, threading.Thre
     """
     Spawn pw-record capturing monitor_name as raw float32 mono at 44100 Hz.
     Starts a daemon reader thread that keeps _latest_raw current.
-    Returns (proc, reader_thread).
+    Returns (proc, reader_thread). Safe to call multiple times for restarts.
     """
     if not shutil.which('pw-record'):
         print(
@@ -383,18 +465,24 @@ def main() -> None:
     proc, reader_thread = start_pw_record(monitor_name)
     rate                = 44100                        # matches --rate flag passed to pw-record
 
+    # Mutable boxes so the watchdog thread can hot-swap proc/reader on restart.
+    proc_box   = [proc]
+    reader_box = [reader_thread]
+
     logfile = None
     if debug_freeze:
         os.makedirs('runlogs', exist_ok=True)
         logname = f"runlogs/13_freeze_debug_{time.strftime('%Y%m%d_%H%M%S')}.log"
         logfile = open(logname, 'w')
         _log(logfile, f"START: monitor={monitor_name} pw_pid={proc.pid}")
-        threading.Thread(
-            target=_heartbeat_loop,
-            args=(logfile, proc, reader_thread),
-            daemon=True,
-        ).start()
         print(f"[freeze] Logging to {logname}", flush=True)
+
+    # Watchdog always runs: stall detection + auto-restart are not debug-only.
+    threading.Thread(
+        target=_watchdog_loop,
+        args=(logfile, proc_box, reader_box, monitor_name),
+        daemon=True,
+    ).start()
 
     pygame.init()
     pygame.display.set_caption("Plasma Warp")
@@ -402,13 +490,17 @@ def main() -> None:
     clock  = pygame.time.Clock()
     font   = pygame.font.SysFont(None, 20)
 
-    t      = 0.0
-    bass_s = mid_s = high_s = 0.0
-    frame  = 0
+    t       = 0.0
+    bass_s  = mid_s = high_s = 0.0
+    frame   = 0
     running = True
 
     try:
         while running:
+            if _quit_event.is_set():
+                running = False
+                continue
+
             dt = clock.tick(FPS) / 1000.0
 
             for event in pygame.event.get():
@@ -424,9 +516,8 @@ def main() -> None:
             mono = np.frombuffer(raw, dtype=np.float32).copy()
 
             rms = float(np.sqrt(np.mean(mono ** 2)))
-            if debug_freeze:
-                with _audio_lock:
-                    _latest_rms = rms
+            with _audio_lock:
+                _latest_rms = rms
 
             bass_s, mid_s, high_s, bass_r, mid_r, high_r = _smooth_bands(
                 mono, rate, bass_s, mid_s, high_s,
@@ -452,17 +543,17 @@ def main() -> None:
 
             t += dt
     finally:
-        if debug_freeze and logfile is not None:
+        if logfile is not None:
             with _audio_lock:
                 final_chunks = _chunks_total
                 final_rms    = _latest_rms
             _log(logfile, f"EXIT: chunks_total={final_chunks} final_rms={final_rms:.4f}")
             logfile.close()
-        proc.terminate()
+        proc_box[0].terminate()
         try:
-            proc.wait(timeout=2)
+            proc_box[0].wait(timeout=2)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            proc_box[0].kill()
         pygame.quit()
 
 
