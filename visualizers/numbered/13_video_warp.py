@@ -273,20 +273,29 @@ def _watchdog_loop(
                  f"STALL detected, recovering... (restart count: {restart_count})")
 
             old_proc = proc_box[0]
-            old_proc.terminate()
+            old_proc.terminate()  # non-blocking; runs in parallel with pactl below
+
+            _log(logfile, "  suspending monitor source")
+            suspend = subprocess.run(
+                ['pactl', 'suspend-source', monitor_name, '1'],
+                check=False, timeout=1.0,
+            )
+            # old_proc likely already dead after the pactl call; cap wait at 1 s
             try:
-                old_proc.wait(timeout=2)
+                old_proc.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 old_proc.kill()
                 old_proc.wait()
 
-            _log(logfile, "  suspending monitor source")
-            subprocess.run(['pactl', 'suspend-source', monitor_name, '1'],
-                           check=False, timeout=2)
-            time.sleep(0.1)
-            _log(logfile, "  resuming monitor source")
-            subprocess.run(['pactl', 'suspend-source', monitor_name, '0'],
-                           check=False, timeout=2)
+            if suspend.returncode != 0:
+                _log(logfile, "  suspend failed (skipping resume)")
+            else:
+                time.sleep(0.05)
+                _log(logfile, "  resuming monitor source")
+                subprocess.run(
+                    ['pactl', 'suspend-source', monitor_name, '0'],
+                    check=False, timeout=1.0,
+                )
 
             _log(logfile, "  spawning fresh pw-record")
             new_proc, new_reader = start_pw_record(monitor_name)
@@ -501,10 +510,11 @@ def main() -> None:
     clock  = pygame.time.Clock()
     font   = pygame.font.SysFont(None, 20)
 
-    t       = 0.0
-    bass_s  = mid_s = high_s = 0.0
-    frame   = 0
-    running = True
+    t            = 0.0
+    bass_s       = mid_s = high_s = 0.0
+    frame        = 0
+    running      = True
+    show_overlay = True
 
     try:
         while running:
@@ -517,8 +527,11 @@ def main() -> None:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                    elif event.key == pygame.K_h:
+                        show_overlay = not show_overlay
 
             # Grab the latest raw bytes from the reader thread (O(1) under lock),
             # then convert to float32 numpy outside the lock.
@@ -549,7 +562,8 @@ def main() -> None:
             surf   = array_to_surface(plasma)
             scaled = pygame.transform.scale(surf, (WIDTH, HEIGHT))
             window.blit(scaled, (0, 0))
-            draw_overlay(window, rms, bass_s, mid_s, high_s, font)
+            if show_overlay:
+                draw_overlay(window, rms, bass_s, mid_s, high_s, font)
             pygame.display.flip()
 
             t += dt
