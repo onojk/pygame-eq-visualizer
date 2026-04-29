@@ -144,8 +144,83 @@ def draw_overlay(
 # Replacing the reference under the lock is O(1); the render loop converts
 # to numpy outside the lock so the lock is held for the minimum possible time.
 # ---------------------------------------------------------------------------
-_audio_lock = threading.Lock()
-_latest_raw = bytes(CHUNK * 4)  # zeroed silence until first chunk arrives
+_audio_lock   = threading.Lock()
+_latest_raw   = bytes(CHUNK * 4)  # zeroed silence until first chunk arrives
+_chunks_total = 0                  # incremented by reader thread on each chunk
+_latest_rms   = 0.0               # updated by main loop each frame
+
+
+# ---------------------------------------------------------------------------
+# Debug-freeze instrumentation  (active only when DEBUG_FREEZE=1)
+# ---------------------------------------------------------------------------
+
+def _ts() -> str:
+    t = time.time()
+    return time.strftime("%H:%M:%S", time.localtime(t)) + f".{int(t * 1000) % 1000:03d}"
+
+
+def _log(logfile, msg: str) -> None:
+    line = f"[{_ts()}] {msg}"
+    print(line, flush=True)
+    logfile.write(line + "\n")
+    logfile.flush()
+
+
+def _dump_diagnostics(logfile, proc: subprocess.Popen) -> None:
+    pid = proc.pid
+    cmds: list[tuple[list[str], int | None]] = [
+        (['pactl', 'list', 'sink-inputs', 'short'], None),
+        (['pactl', 'list', 'sources', 'short'],      30),
+        (['pactl', 'list', 'sinks', 'short'],         10),
+        (['ps', '-o', 'pid,stat,cmd', '-p', str(pid)], None),
+    ]
+    for cmd, head in cmds:
+        try:
+            out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT, timeout=5)
+            if head is not None:
+                out = '\n'.join(out.splitlines()[:head])
+        except Exception as exc:
+            out = f"ERROR: {exc}"
+        _log(logfile, f"--- {' '.join(cmd)} ---\n{out}")
+
+    proc_status = f'/proc/{pid}/status'
+    try:
+        with open(proc_status) as fh:
+            out = ''.join(fh.readline() for _ in range(10))
+    except Exception as exc:
+        out = f"ERROR: {exc}"
+    _log(logfile, f"--- {proc_status} (head 10) ---\n{out}")
+
+
+def _heartbeat_loop(logfile, proc: subprocess.Popen, reader_thread: threading.Thread) -> None:
+    consecutive_silent = 0
+    had_nonzero        = False
+    freeze_dumped      = False
+
+    while True:
+        time.sleep(1.0)
+        with _audio_lock:
+            rms    = _latest_rms
+            chunks = _chunks_total
+
+        reader_alive = reader_thread.is_alive()
+        pw_alive     = proc.poll() is None
+
+        _log(logfile,
+             f"heartbeat: rms={rms:.4f} chunks_total={chunks}"
+             f" reader_alive={reader_alive} pw_alive={pw_alive}")
+
+        if rms > 0.0:
+            had_nonzero        = True
+            consecutive_silent = 0
+            freeze_dumped      = False
+        elif had_nonzero:
+            consecutive_silent += 1
+
+        if consecutive_silent >= 3 and not freeze_dumped:
+            freeze_dumped = True
+            _log(logfile, "WATCHDOG: audio went silent. Dumping diagnostic state...")
+            _dump_diagnostics(logfile, proc)
 
 
 # ---------------------------------------------------------------------------
@@ -206,11 +281,11 @@ def find_monitor_source() -> str:
     return candidates[0]
 
 
-def start_pw_record(monitor_name: str) -> subprocess.Popen:
+def start_pw_record(monitor_name: str) -> tuple[subprocess.Popen, threading.Thread]:
     """
     Spawn pw-record capturing monitor_name as raw float32 mono at 44100 Hz.
-    Starts a daemon reader thread that keeps _latest_chunk current.
-    Returns the Popen object so the caller can terminate it on exit.
+    Starts a daemon reader thread that keeps _latest_raw current.
+    Returns (proc, reader_thread).
     """
     if not shutil.which('pw-record'):
         print(
@@ -238,7 +313,7 @@ def start_pw_record(monitor_name: str) -> subprocess.Popen:
     print(f"[audio] pw-record PID: {proc.pid}")
 
     def _reader():
-        global _latest_raw
+        global _latest_raw, _chunks_total
         frame_bytes = CHUNK * 4
         fd = proc.stdout.fileno()
         # Non-blocking so os.read never stalls; BlockingIOError means pipe is empty.
@@ -253,7 +328,8 @@ def start_pw_record(monitor_name: str) -> subprocess.Popen:
                 buf.extend(data)
                 while len(buf) >= frame_bytes:
                     with _audio_lock:
-                        _latest_raw = bytes(buf[:frame_bytes])
+                        _latest_raw    = bytes(buf[:frame_bytes])
+                        _chunks_total += 1
                     del buf[:frame_bytes]
             except BlockingIOError:
                 time.sleep(0.001)                 # pipe empty; yield briefly
@@ -262,9 +338,10 @@ def start_pw_record(monitor_name: str) -> subprocess.Popen:
         for line in proc.stderr:
             print(f"[pw-record] {line.decode(errors='replace').rstrip()}", flush=True)
 
-    threading.Thread(target=_reader,        daemon=True).start()
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
     threading.Thread(target=_stderr_logger, daemon=True).start()
-    return proc
+    return proc, reader_thread
 
 
 def _smooth_bands(
@@ -297,11 +374,27 @@ def _smooth_bands(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    debug = os.environ.get('DEBUG_AUDIO', '') == '1'
+    global _latest_rms
 
-    monitor_name = find_monitor_source()   # exits 1 if no monitor found
-    proc         = start_pw_record(monitor_name)
-    rate         = 44100                   # matches --rate flag passed to pw-record
+    debug        = os.environ.get('DEBUG_AUDIO',  '') == '1'
+    debug_freeze = os.environ.get('DEBUG_FREEZE', '') == '1'
+
+    monitor_name        = find_monitor_source()        # exits 1 if no monitor found
+    proc, reader_thread = start_pw_record(monitor_name)
+    rate                = 44100                        # matches --rate flag passed to pw-record
+
+    logfile = None
+    if debug_freeze:
+        os.makedirs('runlogs', exist_ok=True)
+        logname = f"runlogs/13_freeze_debug_{time.strftime('%Y%m%d_%H%M%S')}.log"
+        logfile = open(logname, 'w')
+        _log(logfile, f"START: monitor={monitor_name} pw_pid={proc.pid}")
+        threading.Thread(
+            target=_heartbeat_loop,
+            args=(logfile, proc, reader_thread),
+            daemon=True,
+        ).start()
+        print(f"[freeze] Logging to {logname}", flush=True)
 
     pygame.init()
     pygame.display.set_caption("Plasma Warp")
@@ -330,7 +423,11 @@ def main() -> None:
                 raw = _latest_raw
             mono = np.frombuffer(raw, dtype=np.float32).copy()
 
-            rms    = float(np.sqrt(np.mean(mono ** 2)))
+            rms = float(np.sqrt(np.mean(mono ** 2)))
+            if debug_freeze:
+                with _audio_lock:
+                    _latest_rms = rms
+
             bass_s, mid_s, high_s, bass_r, mid_r, high_r = _smooth_bands(
                 mono, rate, bass_s, mid_s, high_s,
             )
@@ -355,6 +452,12 @@ def main() -> None:
 
             t += dt
     finally:
+        if debug_freeze and logfile is not None:
+            with _audio_lock:
+                final_chunks = _chunks_total
+                final_rms    = _latest_rms
+            _log(logfile, f"EXIT: chunks_total={final_chunks} final_rms={final_rms:.4f}")
+            logfile.close()
         proc.terminate()
         try:
             proc.wait(timeout=2)
