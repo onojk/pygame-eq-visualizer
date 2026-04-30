@@ -121,7 +121,7 @@ def _smooth_bands(
 # ---------------------------------------------------------------------------
 
 def load_audio(path: str) -> tuple[np.ndarray, int]:
-    """Read wav → mono float32 in [-1, 1] and its sample rate."""
+    """Read wav → mono float32 normalised to ±0.95 and its sample rate."""
     rate, data = wavfile.read(path)
     if data.ndim > 1:
         data = data.mean(axis=1)
@@ -131,6 +131,9 @@ def load_audio(path: str) -> tuple[np.ndarray, int]:
         data = data.astype(np.float32) / 2147483648.0
     elif data.dtype != np.float32:
         data = data.astype(np.float32)
+    peak = float(np.max(np.abs(data)))
+    if peak > 0:
+        data = data / peak * 0.95  # normalise to ±0.95 regardless of source level
     return data, rate
 
 
@@ -221,26 +224,38 @@ def main() -> None:
             bass_s, mid_s, high_s, _, _, _ = _smooth_bands(
                 chunk, sample_rate, bass_s, mid_s, high_s,
             )
+            # Floor prevents fully flat plasma if the FFT produces all-zeros.
+            bass_s = max(bass_s, 1e-5)
+            mid_s  = max(mid_s,  1e-5)
+            high_s = max(high_s, 1e-5)
+
+            rms = float(np.sqrt(np.mean(chunk ** 2)))
 
             bass_v = math.sqrt(max(bass_s, 0.0)) * BASS_SCALE
             mid_v  = math.sqrt(max(mid_s,  0.0)) * MID_SCALE
             high_v = math.sqrt(max(high_s, 0.0)) * HIGH_SCALE
 
-            # generate_plasma returns (PLAS_H, PLAS_W, 3) uint8 RGB — pure numpy,
-            # no pygame Surface involved.  PIL upscales to 4K and returns a new
-            # array that is already row-major (H, W, 3) RGB, C-contiguous.
-            plasma = generate_plasma(t, bass_v, mid_v, high_v)  # (H, W, 3)
-            arr_4k = np.asarray(
-                Image.fromarray(plasma).resize((WIDTH, HEIGHT), Image.BILINEAR)
+            # generate_plasma returns (PLAS_H, PLAS_W, 3) uint8 RGB — pure numpy.
+            # Explicit mode='RGB' and ascontiguousarray guard against any PIL
+            # inference of wrong mode or non-contiguous array views.
+            plasma = np.ascontiguousarray(generate_plasma(t, bass_v, mid_v, high_v),
+                                          dtype=np.uint8)
+            arr_4k = np.ascontiguousarray(
+                np.asarray(
+                    Image.fromarray(plasma, mode='RGB').resize(
+                        (WIDTH, HEIGHT), Image.BILINEAR
+                    )
+                ),
+                dtype=np.uint8,
             )  # (HEIGHT, WIDTH, 3) uint8 RGB, C-contiguous
 
             if save_first_frame and frame_num == 0:
-                Image.fromarray(arr_4k).save('renders/first_frame.png')
+                Image.fromarray(arr_4k, mode='RGB').save('renders/first_frame.png')
                 print("[render] Saved first frame → renders/first_frame.png", flush=True)
 
             ffmpeg_proc.stdin.write(arr_4k.tobytes())
 
-            # Progress every 60 rendered frames (= 1 s of video).
+            # Progress + audio diagnostics every 60 rendered frames (= 1 s of video).
             window_frames += 1
             if window_frames == 60 or frame_num == total_frames - 1:
                 now        = time.time()
@@ -257,6 +272,11 @@ def main() -> None:
                     f"[render] frame {frame_num+1}/{total_frames}"
                     f"  ({pct:.1f}% — {m_min}:{m_s:02d} of music"
                     f" — ETA {eta_str})",
+                    flush=True,
+                )
+                print(
+                    f"[debug]  frame={frame_num} rms={rms:.4f}"
+                    f" B={bass_s:.5f} M={mid_s:.5f} H={high_s:.5f}",
                     flush=True,
                 )
                 window_start  = now
