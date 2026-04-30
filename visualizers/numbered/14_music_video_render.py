@@ -202,6 +202,12 @@ def main() -> None:
 
     pygame.init()
 
+    # depth=24 (no alpha) gives a packed RGB surface with consistent channel
+    # ordering when read back via surfarray.  Created once; reused every frame.
+    canvas4k = pygame.Surface((WIDTH, HEIGHT), 0, 24)
+
+    save_first_frame = os.environ.get('SAVE_FIRST_FRAME', '') == '1'
+
     bass_s = mid_s = high_s = 0.0
     render_start  = time.time()
     window_start  = render_start
@@ -227,19 +233,25 @@ def main() -> None:
             mid_v  = math.sqrt(max(mid_s,  0.0)) * MID_SCALE
             high_v = math.sqrt(max(high_s, 0.0)) * HIGH_SCALE
 
-            # Generate plasma at internal resolution, smoothscale to 4K.
+            # Generate plasma at internal resolution, smoothscale into canvas4k.
             plasma = generate_plasma(t, bass_v, mid_v, high_v)
             small  = pygame.surfarray.make_surface(
                 np.ascontiguousarray(plasma.swapaxes(0, 1))  # (W,H,3)
             )
-            scaled = pygame.transform.smoothscale(small, (WIDTH, HEIGHT))
+            canvas4k.blit(pygame.transform.smoothscale(small, (WIDTH, HEIGHT)), (0, 0))
 
-            # surfarray.array3d → (W, H, 3); transpose to row-major (H, W, 3)
-            # so ffmpeg receives scanlines in the correct order.
-            frame_rgb = pygame.surfarray.array3d(scaled)          # (W, H, 3)
-            ffmpeg_proc.stdin.write(
-                np.ascontiguousarray(frame_rgb.transpose(1, 0, 2)).tobytes()
-            )
+            # Optionally save first frame as PNG for visual sanity-check.
+            if save_first_frame and frame_num == 0:
+                pygame.image.save(canvas4k, 'renders/first_frame.png')
+                print("[render] Saved first frame → renders/first_frame.png", flush=True)
+
+            # array3d returns (W, H, 3) in SDL2's native byte order (BGR on Linux).
+            # Transpose to row-major (H, W, 3), swap BGR→RGB, force C-contiguous
+            # so ffmpeg's rgb24 decoder receives the correct channel order.
+            frame_arr = pygame.surfarray.array3d(canvas4k)    # (W, H, 3) BGR
+            frame_arr = frame_arr.transpose(1, 0, 2)           # (H, W, 3)
+            frame_arr = frame_arr[:, :, [2, 1, 0]]             # BGR → RGB
+            ffmpeg_proc.stdin.write(np.ascontiguousarray(frame_arr).tobytes())
 
             # Progress every 60 rendered frames (= 1 s of video).
             window_frames += 1
