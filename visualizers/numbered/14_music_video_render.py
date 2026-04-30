@@ -22,14 +22,13 @@ import subprocess
 import sys
 import time
 
-# Must be set before pygame is imported to suppress window/audio init.
-os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
-os.environ.setdefault('SDL_AUDIODRIVER', 'dummy')
-
 import numpy as np
-import pygame
 from scipy.fftpack import fft
 from scipy.io import wavfile
+try:
+    from PIL import Image
+except ImportError:
+    sys.exit("ERROR: Pillow not installed. Run: pip install Pillow")
 
 # ---------------------------------------------------------------------------
 # CONFIG — copied verbatim from 13_video_warp.py
@@ -200,12 +199,6 @@ def main() -> None:
         stderr=subprocess.DEVNULL,  # suppress per-frame encoding noise
     )
 
-    pygame.init()
-
-    # depth=24 (no alpha) gives a packed RGB surface with consistent channel
-    # ordering when read back via surfarray.  Created once; reused every frame.
-    canvas4k = pygame.Surface((WIDTH, HEIGHT), 0, 24)
-
     save_first_frame = os.environ.get('SAVE_FIRST_FRAME', '') == '1'
 
     bass_s = mid_s = high_s = 0.0
@@ -233,25 +226,19 @@ def main() -> None:
             mid_v  = math.sqrt(max(mid_s,  0.0)) * MID_SCALE
             high_v = math.sqrt(max(high_s, 0.0)) * HIGH_SCALE
 
-            # Generate plasma at internal resolution, smoothscale into canvas4k.
-            plasma = generate_plasma(t, bass_v, mid_v, high_v)
-            small  = pygame.surfarray.make_surface(
-                np.ascontiguousarray(plasma.swapaxes(0, 1))  # (W,H,3)
-            )
-            canvas4k.blit(pygame.transform.smoothscale(small, (WIDTH, HEIGHT)), (0, 0))
+            # generate_plasma returns (PLAS_H, PLAS_W, 3) uint8 RGB — pure numpy,
+            # no pygame Surface involved.  PIL upscales to 4K and returns a new
+            # array that is already row-major (H, W, 3) RGB, C-contiguous.
+            plasma = generate_plasma(t, bass_v, mid_v, high_v)  # (H, W, 3)
+            arr_4k = np.asarray(
+                Image.fromarray(plasma).resize((WIDTH, HEIGHT), Image.BILINEAR)
+            )  # (HEIGHT, WIDTH, 3) uint8 RGB, C-contiguous
 
-            # Optionally save first frame as PNG for visual sanity-check.
             if save_first_frame and frame_num == 0:
-                pygame.image.save(canvas4k, 'renders/first_frame.png')
+                Image.fromarray(arr_4k).save('renders/first_frame.png')
                 print("[render] Saved first frame → renders/first_frame.png", flush=True)
 
-            # array3d returns (W, H, 3) in SDL2's native byte order (BGR on Linux).
-            # Transpose to row-major (H, W, 3), swap BGR→RGB, force C-contiguous
-            # so ffmpeg's rgb24 decoder receives the correct channel order.
-            frame_arr = pygame.surfarray.array3d(canvas4k)    # (W, H, 3) BGR
-            frame_arr = frame_arr.transpose(1, 0, 2)           # (H, W, 3)
-            frame_arr = frame_arr[:, :, [2, 1, 0]]             # BGR → RGB
-            ffmpeg_proc.stdin.write(np.ascontiguousarray(frame_arr).tobytes())
+            ffmpeg_proc.stdin.write(arr_4k.tobytes())
 
             # Progress every 60 rendered frames (= 1 s of video).
             window_frames += 1
@@ -292,8 +279,6 @@ def main() -> None:
         except subprocess.TimeoutExpired:
             ffmpeg_proc.kill()
         sys.exit(1)
-    finally:
-        pygame.quit()
 
     size_mb  = os.path.getsize(output_path) / (1024 * 1024)
     elapsed  = time.time() - render_start
