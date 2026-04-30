@@ -41,16 +41,18 @@ MID_SCALE  = 25.0
 HIGH_SCALE = 12.0
 
 WIDTH,  HEIGHT  = 3840, 2160   # 4K UHD output resolution
-PLAS_W, PLAS_H  = 640,  360    # internal plasma resolution (scaled up 6×)
+PLAS_W, PLAS_H  = 3840, 2160   # native 4K — no upscale
 FPS             = 60            # output frame rate
 
 TAU = math.tau  # 2π
 
 # ---------------------------------------------------------------------------
-# Coordinate grids — same shape and range as 13; computed once.
+# Coordinate grids — computed once at module load; (1, PLAS_W) / (PLAS_H, 1)
+# broadcast to (PLAS_H, PLAS_W) in generate_plasma without a meshgrid.
+# At 3840×2160 each grid is ~31 MB; holding two is ~62 MB total.
 # ---------------------------------------------------------------------------
-_px = np.linspace(0.0, TAU, PLAS_W, dtype=np.float32).reshape(1, PLAS_W)
-_py = np.linspace(0.0, TAU, PLAS_H, dtype=np.float32).reshape(PLAS_H, 1)
+_px = np.linspace(0.0, TAU, PLAS_W, dtype=np.float32)[None, :]   # (1, PLAS_W)
+_py = np.linspace(0.0, TAU, PLAS_H, dtype=np.float32)[:, None]   # (PLAS_H, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +185,7 @@ def main() -> None:
         f"[render] Audio: {sample_rate} Hz, {d_min}:{d_s:02d}"
         f" → {total_frames} frames at {FPS} fps"
     )
+    print("[render] Native 4K source — expect ~6x slower than scaled mode")
 
     # Spawn ffmpeg: reads raw RGB24 frames from stdin, audio directly from file.
     ffmpeg_proc = subprocess.Popen(
@@ -235,19 +238,11 @@ def main() -> None:
             mid_v  = math.sqrt(max(mid_s,  0.0)) * MID_SCALE
             high_v = math.sqrt(max(high_s, 0.0)) * HIGH_SCALE
 
-            # generate_plasma returns (PLAS_H, PLAS_W, 3) uint8 RGB — pure numpy.
-            # Explicit mode='RGB' and ascontiguousarray guard against any PIL
-            # inference of wrong mode or non-contiguous array views.
-            plasma = np.ascontiguousarray(generate_plasma(t, bass_v, mid_v, high_v),
-                                          dtype=np.uint8)
+            # generate_plasma returns (PLAS_H, PLAS_W, 3) = (2160, 3840, 3) uint8.
+            # Already 4K — no upscale needed.  Each frame is ~24 MB raw.
             arr_4k = np.ascontiguousarray(
-                np.asarray(
-                    Image.fromarray(plasma, mode='RGB').resize(
-                        (WIDTH, HEIGHT), Image.BILINEAR
-                    )
-                ),
-                dtype=np.uint8,
-            )  # (HEIGHT, WIDTH, 3) uint8 RGB, C-contiguous
+                generate_plasma(t, bass_v, mid_v, high_v), dtype=np.uint8
+            )
 
             if save_first_frame and frame_num == 0:
                 Image.fromarray(arr_4k, mode='RGB').save('renders/first_frame.png')
