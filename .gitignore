@@ -54,3 +54,4 @@ frames_dialup_dawn/
 
 # Audio files: never commit, may be copyrighted
 assets/audio/*
+!assets/audio/.gitkeep
