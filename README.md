@@ -125,6 +125,10 @@ PRs welcome. Especially:
 
 Run `python3 main.py --test-all` before submitting to make sure nothing regressed.
 
+## See also
+
+[Abstrakt](https://github.com/onojk/abstrakt) — feeds these visualizers through an FFmpeg kaleidoscope post-stack to produce symmetric mandala-style music videos from an audio file.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
